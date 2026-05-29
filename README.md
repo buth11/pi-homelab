@@ -43,8 +43,8 @@ GMKtec EVO-X2 (LM Studio — LLM backend)
 - [x] Hardware setup
 - [x] OS installation (Raspberry Pi OS Lite 64-bit Bookworm)
 - [x] Node preparation (cgroups, swap disabled)
-- [ ] K3s installation
-- [ ] MetalLB + Traefik
+- [x] K3s installation — 3 nodes Ready
+- [ ] MetalLB + Traefik Ingress
 - [ ] Pi-hole deployment
 - [ ] Tailscale operator
 - [ ] Prometheus + Grafana + Loki
