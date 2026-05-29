@@ -23,12 +23,9 @@
       ]
     }
   },
-  "mounts": [
-    "source=${localEnv:HOME}/.kube,target=/root/.kube,type=bind,consistency=cached"
-  ],
-  "postCreateCommand": "pip install ansible && kubectl version --client",
+  "postCreateCommand": "pip install ansible && bash .devcontainer/setup-kubeconfig.sh && kubectl version --client",
   "remoteEnv": {
-    "KUBECONFIG": "/root/.kube/config",
+    "KUBECONFIG": "/home/vscode/.kube/config",
     "PI_MASTER_IP": "192.168.1.105",
     "PI_WORKER1_IP": "192.168.1.102",
     "PI_WORKER2_IP": "192.168.1.107"
