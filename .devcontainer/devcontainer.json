@@ -1,0 +1,36 @@
+{
+  "name": "pi-homelab",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "latest",
+      "minikube": "none"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "ms-azuretools.vscode-docker",
+        "hashicorp.terraform",
+        "github.vscode-github-actions",
+        "redhat.vscode-yaml"
+      ]
+    }
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/.kube,target=/root/.kube,type=bind,consistency=cached"
+  ],
+  "postCreateCommand": "pip install ansible && kubectl version --client",
+  "remoteEnv": {
+    "KUBECONFIG": "/root/.kube/config",
+    "PI_MASTER_IP": "192.168.1.105",
+    "PI_WORKER1_IP": "192.168.1.102",
+    "PI_WORKER2_IP": "192.168.1.107"
+  }
+}
