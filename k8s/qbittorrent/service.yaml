@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: qbittorrent
+  namespace: qbittorrent
+spec:
+  selector:
+    app: qbittorrent
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: webui
+  type: LoadBalancer
+  loadBalancerIP: 192.168.50.54

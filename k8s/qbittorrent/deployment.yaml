@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qbittorrent
+  namespace: qbittorrent
+  labels:
+    app: qbittorrent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qbittorrent
+  template:
+    metadata:
+      labels:
+        app: qbittorrent
+    spec:
+      containers:
+      - name: gluetun
+        image: qmcgaw/gluetun:latest
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+        env:
+        - name: VPN_SERVICE_PROVIDER
+          value: "custom"
+        - name: VPN_TYPE
+          value: "wireguard"
+        - name: WIREGUARD_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: protonvpn-wireguard
+              key: private-key
+        - name: WIREGUARD_PUBLIC_KEY
+          value: "wnDzTUyqN8KFDQJEj0vbYwfcEQ4A8FEIO0ErLApJCE4="
+        - name: WIREGUARD_ADDRESSES
+          value: "10.2.0.2/32"
+        - name: WIREGUARD_ENDPOINT_IP
+          value: "169.150.218.75"
+        - name: WIREGUARD_ENDPOINT_PORT
+          value: "51820"
+        - name: TZ
+          value: "Europe/Warsaw"
+        - name: DNS_SERVER
+          value: "off"
+        - name: BLOCK_MALICIOUS
+          value: "off"
+        ports:
+        - containerPort: 8080
+          name: webui
+
+      - name: qbittorrent
+        image: lscr.io/linuxserver/qbittorrent:latest
+        env:
+        - name: PUID
+          value: "1000"
+        - name: PGID
+          value: "1000"
+        - name: TZ
+          value: "Europe/Warsaw"
+        - name: WEBUI_PORT
+          value: "8080"
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: downloads
+          mountPath: /downloads
+
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: qbittorrent-config
+      - name: downloads
+        persistentVolumeClaim:
+          claimName: qbittorrent-downloads
+
+      nodeSelector:
+        kubernetes.io/hostname: pi4-worker2
