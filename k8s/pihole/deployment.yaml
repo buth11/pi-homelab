@@ -53,8 +53,10 @@ spec:
           mountPath: /etc/dnsmasq.d
       volumes:
       - name: pihole-data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: pihole-data
       - name: dnsmasq-data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: dnsmasq-data
       nodeSelector:
         kubernetes.io/hostname: pi4-worker2
