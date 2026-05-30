@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "pi-homelab",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": {
@@ -23,11 +23,11 @@
       ]
     }
   },
-  "postCreateCommand": "pip install ansible && bash .devcontainer/setup-kubeconfig.sh && kubectl version --client",
+  "postCreateCommand": "pip install ansible && kubectl version --client",
   "remoteEnv": {
     "KUBECONFIG": "/home/vscode/.kube/config",
-    "PI_MASTER_IP": "192.168.1.105",
-    "PI_WORKER1_IP": "192.168.1.102",
-    "PI_WORKER2_IP": "192.168.1.107"
+    "PI_MASTER_IP": "192.168.50.10",
+    "PI_WORKER1_IP": "192.168.50.11",
+    "PI_WORKER2_IP": "192.168.50.12"
   }
 }
