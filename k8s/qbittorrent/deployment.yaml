@@ -42,13 +42,17 @@ spec:
           value: "51820"
         - name: TZ
           value: "Europe/Warsaw"
-        - name: DNS_SERVER
-          value: "off"
+        - name: FIREWALL_INPUT_PORTS
+          value: "8080,3000"
+        - name: HEALTH_VPN_DURATION_INITIAL
+          value: "120s"
         - name: BLOCK_MALICIOUS
           value: "off"
         ports:
         - containerPort: 8080
           name: webui
+        - containerPort: 3000
+          name: firefox
 
       - name: qbittorrent
         image: lscr.io/linuxserver/qbittorrent:latest
@@ -67,6 +71,23 @@ spec:
         - name: downloads
           mountPath: /downloads
 
+      - name: firefox
+        image: lscr.io/linuxserver/firefox:latest
+        env:
+        - name: PUID
+          value: "1000"
+        - name: PGID
+          value: "1000"
+        - name: TZ
+          value: "Europe/Warsaw"
+        - name: DISPLAY
+          value: ":1"
+        volumeMounts:
+        - name: firefox-config
+          mountPath: /config
+        - name: downloads         
+          mountPath: /downloads 
+
       volumes:
       - name: config
         persistentVolumeClaim:
@@ -74,6 +95,8 @@ spec:
       - name: downloads
         persistentVolumeClaim:
           claimName: qbittorrent-downloads
+      - name: firefox-config
+        emptyDir: {}
 
       nodeSelector:
         kubernetes.io/hostname: pi4-worker2
