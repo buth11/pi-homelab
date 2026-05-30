@@ -88,3 +88,18 @@ kubectl get ipaddresspool -n metallb-system
 # Check MetalLB speakers
 kubectl get pods -n metallb-system -o wide
 ```
+
+## Grafana
+
+```bash
+# Reset Grafana admin password
+kubectl exec -n monitoring deployment/kube-prometheus-stack-grafana -c grafana -- /usr/share/grafana/bin/grafana cli admin reset-admin-password 'NewPassword'
+
+# Get Grafana admin password from secret
+kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 -d
+
+# Access Grafana web panel
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
+# Then open: http://localhost:3000
+# Login: admin
+```
