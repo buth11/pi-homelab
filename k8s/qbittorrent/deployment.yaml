@@ -16,44 +16,6 @@ spec:
         app: qbittorrent
     spec:
       containers:
-      - name: gluetun
-        image: qmcgaw/gluetun:latest
-        securityContext:
-          capabilities:
-            add:
-            - NET_ADMIN
-        env:
-        - name: VPN_SERVICE_PROVIDER
-          value: "custom"
-        - name: VPN_TYPE
-          value: "wireguard"
-        - name: WIREGUARD_PRIVATE_KEY
-          valueFrom:
-            secretKeyRef:
-              name: protonvpn-wireguard
-              key: private-key
-        - name: WIREGUARD_PUBLIC_KEY
-          value: "wnDzTUyqN8KFDQJEj0vbYwfcEQ4A8FEIO0ErLApJCE4="
-        - name: WIREGUARD_ADDRESSES
-          value: "10.2.0.2/32"
-        - name: WIREGUARD_ENDPOINT_IP
-          value: "169.150.218.75"
-        - name: WIREGUARD_ENDPOINT_PORT
-          value: "51820"
-        - name: TZ
-          value: "Europe/Warsaw"
-        - name: FIREWALL_INPUT_PORTS
-          value: "8080,3000"
-        - name: HEALTH_VPN_DURATION_INITIAL
-          value: "120s"
-        - name: BLOCK_MALICIOUS
-          value: "off"
-        ports:
-        - containerPort: 8080
-          name: webui
-        - containerPort: 3000
-          name: firefox
-
       - name: qbittorrent
         image: lscr.io/linuxserver/qbittorrent:latest
         env:
@@ -65,6 +27,9 @@ spec:
           value: "Europe/Warsaw"
         - name: WEBUI_PORT
           value: "8080"
+        ports:
+        - containerPort: 8080
+          name: webui
         volumeMounts:
         - name: config
           mountPath: /config
@@ -80,23 +45,26 @@ spec:
           value: "1000"
         - name: TZ
           value: "Europe/Warsaw"
-        - name: DISPLAY
-          value: ":1"
+        ports:
+        - containerPort: 3000
+          name: firefox-http
+        - containerPort: 3001
+          name: firefox-https
         volumeMounts:
         - name: firefox-config
           mountPath: /config
-        - name: downloads         
-          mountPath: /downloads 
+        - name: downloads
+          mountPath: /downloads
 
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: qbittorrent-config
+          claimName: qbittorrent-config-nas
       - name: downloads
         persistentVolumeClaim:
-          claimName: qbittorrent-downloads
+          claimName: qbittorrent-downloads-nas
       - name: firefox-config
         emptyDir: {}
 
       nodeSelector:
-        kubernetes.io/hostname: pi4-worker2
+        kubernetes.io/hostname: g3-worker3

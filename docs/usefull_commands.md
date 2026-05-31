@@ -103,3 +103,64 @@ kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
 # Then open: http://localhost:3000
 # Login: admin
 ```
+
+## Power Management (deployments)
+```bash
+# Stop all non-essential services (save power)
+kubectl scale deployment qbittorrent -n qbittorrent --replicas=0
+kubectl scale deployment jellyfin -n jellyfin --replicas=0
+
+# Start all services
+kubectl scale deployment qbittorrent -n qbittorrent --replicas=1
+kubectl scale deployment jellyfin -n jellyfin --replicas=1
+
+# Check all deployments status
+kubectl get deployments -A
+```
+
+## qBittorrent
+```bash
+# Get temporary WebUI password
+kubectl logs -n qbittorrent $(kubectl get pods -n qbittorrent -o name | head -1) -c qbittorrent | grep -i password
+
+# Remove lockfile (if qBittorrent crashes in loop)
+kubectl exec -n qbittorrent $(kubectl get pods -n qbittorrent -o name | head -1) -c qbittorrent -- rm -f /config/qBittorrent/lockfile
+
+# Check VPN IP
+kubectl exec -n qbittorrent $(kubectl get pods -n qbittorrent -o name | head -1) -c qbittorrent -- curl -s https://ipinfo.io/ip
+```
+
+## WireGuard VPN (on G3 Mini)
+```bash
+# Connect VPN
+sudo wg-quick up proton
+
+# Disconnect VPN
+sudo wg-quick down proton
+
+# Check VPN status
+sudo wg show proton
+
+# Check current IP
+curl -s https://ipinfo.io/ip
+```
+
+## Node Management
+```bash
+# Drain and remove node from cluster
+kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data --force
+kubectl delete node <node-name>
+
+# Mark node as unschedulable (maintenance)
+kubectl cordon <node-name>
+
+# Mark node as schedulable again
+kubectl uncordon <node-name>
+```
+
+## Cluster Shutdown (3 nodes without Pi3)
+```bash
+ssh buth11@192.168.50.10 "sudo shutdown -h now" &
+ssh buth11@192.168.50.12 "sudo shutdown -h now" &
+ssh buth11@192.168.50.13 "sudo shutdown -h now"
+```

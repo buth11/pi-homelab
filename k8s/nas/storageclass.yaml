@@ -1,0 +1,17 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nas-smb
+provisioner: smb.csi.k8s.io
+parameters:
+  source: "//ASUS/Crucial_2TB"
+  csi.storage.k8s.io/node-stage-secret-name: nas-credentials
+  csi.storage.k8s.io/node-stage-secret-namespace: kube-system
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+mountOptions:
+  - dir_mode=0777
+  - file_mode=0777
+  - uid=1000
+  - gid=1000
+  - vers=2.0
