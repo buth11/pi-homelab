@@ -106,7 +106,12 @@ def _send_wol(mac: str) -> None:
     magic = b"\xff" * 6 + mac_bytes * 16
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.sendto(magic, ("<broadcast>", 9))
+    # Send to subnet broadcast (192.168.50.255) so the packet reaches the
+    # physical LAN from inside the pod network — 255.255.255.255 stays in
+    # the flannel overlay and never reaches the host's 192.168.50.x interface.
+    # Also send to the node's IP directly as fallback (some switches handle it).
+    for dest in ("192.168.50.255", G3_HOST):
+        sock.sendto(magic, (dest, 9))
     sock.close()
 
 def _ssh_exec(host: str, user: str, command: str, key_path: str = SSH_KEY_PATH) -> dict:
