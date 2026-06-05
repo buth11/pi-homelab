@@ -184,6 +184,7 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
   const [confirming,  setConfirming]  = useState(null)
   const [sort,        setSort]        = useState({ col: null, dir: 1 })
   const [logModal,    setLogModal]    = useState(null)
+  const [grouped,     setGrouped]     = useState(true)
 
   const namespaces = useMemo(() => {
     const s = new Set(pods.map(p => p.namespace))
@@ -286,10 +287,23 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
           <span className="text-dim" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
             {filtered.length} / {pods.length}
           </span>
-          <div className="group-btns">
-            <button className="btn-xs btn-ghost" onClick={expandAll}>Rozwiń wszystkie</button>
-            <button className="btn-xs btn-ghost" onClick={collapseAll}>Zwiń wszystkie</button>
-          </div>
+          <label className="toggle-label">
+            <span className="toggle-text">Grupuj</span>
+            <span
+              className={`toggle-switch ${grouped ? 'toggle-on' : ''}`}
+              onClick={() => setGrouped(g => !g)}
+              role="switch"
+              aria-checked={grouped}
+            >
+              <span className="toggle-thumb" />
+            </span>
+          </label>
+          {grouped && (
+            <div className="group-btns">
+              <button className="btn-xs btn-ghost" onClick={expandAll}>Rozwiń wszystkie</button>
+              <button className="btn-xs btn-ghost" onClick={collapseAll}>Zwiń wszystkie</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -297,7 +311,14 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
         <table>
           <thead>
             <tr>
-              {/* namespace column in grouped view is part of group header — keep empty spacer */}
+              {!grouped && (
+                <th
+                  className={`th-sortable ${sort.col === 'namespace' ? 'th-active' : ''}`}
+                  onClick={() => toggleSort('namespace')}
+                >
+                  Namespace <SortIcon col="namespace" sort={sort} />
+                </th>
+              )}
               {COLS.map(c => (
                 <th
                   key={c.key}
@@ -311,26 +332,27 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
             </tr>
           </thead>
           <tbody>
-            {groups.length === 0 ? (
-              <tr><td colSpan={9} className="empty-row">No pods match filter</td></tr>
-            ) : groups.map(([ns, nsPods]) => (
-              <>
-                <GroupHeader
-                  key={`hdr-${ns}`}
-                  ns={ns}
-                  pods={nsPods}
-                  expanded={!!expanded[ns]}
-                  onToggle={() => toggleNs(ns)}
-                />
-                {nsPods.map(pod => {
-                  const key = `${pod.namespace}/${pod.name}`
-                  const isError = ERROR_STATUSES.includes(pod.status)
-                  return (
-                    <tr
-                      key={key}
-                      className={`pod-row ${isError ? 'row-error' : ''} ${expanded[ns] ? 'row-visible' : 'row-hidden'}`}
-                    >
-                      <td className="pod-name">{pod.name}</td>
+            {grouped ? (
+              groups.length === 0 ? (
+                <tr><td colSpan={9} className="empty-row">No pods match filter</td></tr>
+              ) : groups.map(([ns, nsPods]) => (
+                <>
+                  <GroupHeader
+                    key={`hdr-${ns}`}
+                    ns={ns}
+                    pods={nsPods}
+                    expanded={!!expanded[ns]}
+                    onToggle={() => toggleNs(ns)}
+                  />
+                  {nsPods.map(pod => {
+                    const key = `${pod.namespace}/${pod.name}`
+                    const isError = ERROR_STATUSES.includes(pod.status)
+                    return (
+                      <tr
+                        key={key}
+                        className={`pod-row ${isError ? 'row-error' : ''} ${expanded[ns] ? 'row-visible' : 'row-hidden'}`}
+                      >
+                        <td className="pod-name">{pod.name}</td>
                       <td>
                         <span className={`badge ${badgeClass(pod.status)}`}>{pod.status}</span>
                       </td>
@@ -366,7 +388,47 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
                   )
                 })}
               </>
-            ))}
+            ))
+            ) : (
+              sortedFiltered.length === 0 ? (
+                <tr><td colSpan={10} className="empty-row">No pods match filter</td></tr>
+              ) : sortedFiltered.map(pod => {
+                const key = `${pod.namespace}/${pod.name}`
+                const isError = ERROR_STATUSES.includes(pod.status)
+                return (
+                  <tr key={key} className={`pod-row ${isError ? 'row-error' : ''}`}>
+                    <td className="mono text-dim" style={{ fontSize: 12 }}>{pod.namespace}</td>
+                    <td className="pod-name">{pod.name}</td>
+                    <td>
+                      <span className={`badge ${badgeClass(pod.status)}`}>{pod.status}</span>
+                    </td>
+                    <td className="mono" style={{ fontSize: 12 }}>{pod.ready}</td>
+                    <td className="text-dim" style={{ fontSize: 12 }}>{pod.node || '—'}</td>
+                    <td className="mono text-dim" style={{ fontSize: 12 }}>{pod.ip || '—'}</td>
+                    <td>
+                      {pod.restarts > 0
+                        ? <span className={pod.restarts > 5 ? 'text-red' : 'text-yellow'}>{pod.restarts}</span>
+                        : <span className="text-dim">0</span>
+                      }
+                    </td>
+                    <td className="text-dim" style={{ fontSize: 12 }}>{pod.age}</td>
+                    <td>
+                      <button className="btn-sm btn-log" onClick={() => setLogModal(pod)}>
+                        📋 Logi
+                      </button>
+                    </td>
+                    <td>
+                      <button
+                        className={`btn-sm ${confirming === key ? 'btn-danger' : 'btn-ghost'}`}
+                        onClick={() => handleRestart(pod)}
+                      >
+                        {confirming === key ? 'Confirm?' : '↺'}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
           </tbody>
         </table>
       </div>
