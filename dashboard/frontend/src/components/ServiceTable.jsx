@@ -15,8 +15,8 @@ function serviceIcon(name) {
   const key = Object.keys(KNOWN_SERVICES).find(k => name.toLowerCase().includes(k))
   return key ? KNOWN_SERVICES[key].icon : '🌐'
 }
-function serviceLabel(name, label) {
-  if (label) return label
+function serviceLabel(name) {
+  // Always prefer name-based lookup so port-derived backend labels don't override
   const key = Object.keys(KNOWN_SERVICES).find(k => name.toLowerCase().includes(k))
   return key ? KNOWN_SERVICES[key].label : name
 }
@@ -77,7 +77,7 @@ export default function ServiceTable({ services }) {
               <a key={`${s.namespace}/${s.name}`} href={s.url} target="_blank" rel="noreferrer" className="service-card">
                 <span className="service-icon">{serviceIcon(s.name)}</span>
                 <div className="service-info">
-                  <span className="service-name">{serviceLabel(s.name, s.label)}</span>
+                  <span className="service-name">{serviceLabel(s.name)}</span>
                   <span className="service-url">{s.url}</span>
                 </div>
                 <span className="service-arrow">↗</span>
