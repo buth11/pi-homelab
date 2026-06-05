@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-config
+  namespace: dashboard
+data:
+  # G3 MAC address for Wake-on-LAN — fill in before deploying
+  # Run: ssh buth11@192.168.50.13 "ip link show enp3s0 | grep link/ether"
+  G3_MAC: "e0:51:d8:15:3f:be"
+  G3_HOST: "192.168.50.13"
+  G3_USER: "buth11"
+  G3_NODE_NAME: "g3-worker3"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-actions
+  namespace: dashboard
+data:
+  actions: "[]"

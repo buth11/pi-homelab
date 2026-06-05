@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-backend
+  namespace: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-backend
+  template:
+    metadata:
+      labels:
+        app: dashboard-backend
+    spec:
+      serviceAccountName: dashboard-backend
+      containers:
+      - name: backend
+        image: ghcr.io/buth11/pi-homelab/dashboard-backend:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        - name: G3_MAC
+          valueFrom:
+            configMapKeyRef:
+              name: dashboard-config
+              key: G3_MAC
+        - name: G3_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: dashboard-config
+              key: G3_HOST
+        - name: G3_USER
+          valueFrom:
+            configMapKeyRef:
+              name: dashboard-config
+              key: G3_USER
+        - name: G3_NODE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: dashboard-config
+              key: G3_NODE_NAME
+        volumeMounts:
+        - name: ssh-key
+          mountPath: /root/.ssh
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: ssh-key
+        secret:
+          secretName: dashboard-ssh-key
+          defaultMode: 0400

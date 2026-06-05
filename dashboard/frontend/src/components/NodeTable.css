@@ -1,0 +1,17 @@
+.table-wrap { overflow-x: auto; }
+.text-dim { color: var(--text2); }
+.mono { font-family: 'SF Mono', 'Fira Code', monospace; }
+.empty-row { text-align: center; padding: 32px; color: var(--text2); }
+
+.node-name { display: flex; align-items: center; gap: 8px; }
+.node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot-red   { background: var(--red);   box-shadow: 0 0 6px var(--red);   }
+
+.badge-purple { background: rgba(188,140,255,.15); color: var(--purple); }
+
+.progress-row { display: flex; align-items: center; gap: 8px; }
+.progress-label { font-size: 12px; color: var(--text2); white-space: nowrap; min-width: 32px; }
+
+.metric-cell { display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
+.metric-val { font-size: 12px; color: var(--text2); font-family: 'SF Mono', monospace; }

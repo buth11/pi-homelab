@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: shutdown-pods
+  namespace: default
+spec:
+  schedule: "55 22 * * *"
+  timeZone: "Europe/Warsaw"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: shutdown-sa
+          containers:
+          - name: shutdown
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Stopping pods..."
+              kubectl scale deployment qbittorrent -n qbittorrent --replicas=0
+              kubectl scale deployment jellyfin -n jellyfin --replicas=0
+              echo "Pods stopped."
+          restartPolicy: OnFailure
+          nodeSelector:
+            kubernetes.io/hostname: pi4-master
