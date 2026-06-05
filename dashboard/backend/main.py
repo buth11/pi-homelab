@@ -144,6 +144,9 @@ def _drain_node(node_name: str) -> dict:
         if "DaemonSet" in owner_kinds or "Node" in owner_kinds:
             skipped.append(f"{ns}/{name}")
             continue
+        if ns in _DRAIN_SKIP_NS:
+            skipped.append(f"{ns}/{name}")
+            continue
         try:
             eviction = client.V1Eviction(
                 metadata=client.V1ObjectMeta(name=name, namespace=ns)
@@ -160,8 +163,9 @@ def _drain_node(node_name: str) -> dict:
 
 _stop_media_status: dict = {"state": "idle", "log": []}
 
-# Namespaces already being shut down — don't count their pods as "blocking"
-_DRAIN_SKIP_NS = {"qbittorrent", "jellyfin"}
+# Namespaces to skip during drain — already shutting down, or must not be evicted
+# (dashboard namespace: backend pod orchestrates the drain, must not self-evict)
+_DRAIN_SKIP_NS = {"qbittorrent", "jellyfin", "dashboard"}
 
 async def _wait_until_node_empty(node_name: str, log: list, timeout: int = 300) -> bool:
     """Poll until no evictable, non-terminating pods remain on the node."""

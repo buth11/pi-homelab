@@ -13,6 +13,15 @@ spec:
       labels:
         app: dashboard-frontend
     spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - g3-worker3
       containers:
       - name: frontend
         image: ghcr.io/buth11/pi-homelab/dashboard-frontend:latest

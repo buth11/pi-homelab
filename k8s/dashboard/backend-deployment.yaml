@@ -14,6 +14,16 @@ spec:
         app: dashboard-backend
     spec:
       serviceAccountName: dashboard-backend
+      # Pin to pi4-master — must NOT run on g3-worker3 which this pod shuts down
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - g3-worker3
       containers:
       - name: backend
         image: ghcr.io/buth11/pi-homelab/dashboard-backend:latest
