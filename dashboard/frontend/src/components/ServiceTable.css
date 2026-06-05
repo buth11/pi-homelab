@@ -59,3 +59,13 @@
   text-decoration: none;
 }
 .link-btn:hover { background: rgba(88,166,255,.2); text-decoration: none; }
+
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.th-sortable:hover { color: var(--text); background: rgba(255,255,255,.04); }
+.th-active { color: var(--accent); }
+.sort-icon { font-size: 11px; margin-left: 4px; opacity: .5; }
+.th-active .sort-icon { opacity: 1; color: var(--accent); }

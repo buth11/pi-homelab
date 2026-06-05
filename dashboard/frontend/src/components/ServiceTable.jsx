@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react'
 import './ServiceTable.css'
 
 const KNOWN_SERVICES = {
@@ -20,9 +21,49 @@ function serviceLabel(name, label) {
   return key ? KNOWN_SERVICES[key].label : name
 }
 
+const COLS = [
+  { key: 'namespace',   label: 'Namespace' },
+  { key: 'name',        label: 'Name' },
+  { key: 'type',        label: 'Type' },
+  { key: 'cluster_ip',  label: 'Cluster IP' },
+  { key: 'external_ip', label: 'External IP' },
+  { key: 'ports',       label: 'Ports' },
+  { key: '_link',       label: 'Link', noSort: true },
+]
+
+function SortIcon({ col, sort }) {
+  if (sort.col !== col) return <span className="sort-icon sort-none">⇅</span>
+  return sort.dir === 1
+    ? <span className="sort-icon sort-asc">↑</span>
+    : <span className="sort-icon sort-desc">↓</span>
+}
+
 export default function ServiceTable({ services }) {
+  const [sort, setSort] = useState({ col: null, dir: 1 })
+
+  function toggleSort(col) {
+    setSort(s => {
+      if (s.col !== col) return { col, dir: 1 }
+      if (s.dir === 1) return { col, dir: -1 }
+      return { col: null, dir: 1 }
+    })
+  }
+
   const lbServices = services.filter(s => s.type === 'LoadBalancer')
-  const allServices = services
+
+  const sorted = useMemo(() => {
+    if (!sort.col) return services
+    return [...services].sort((a, b) => {
+      let av = a[sort.col] ?? ''
+      let bv = b[sort.col] ?? ''
+      if (sort.col === 'ports') {
+        av = a.ports.map(p => p.port).join(',')
+        bv = b.ports.map(p => p.port).join(',')
+      }
+      const cmp = String(av).localeCompare(String(bv))
+      return sort.dir * cmp
+    })
+  }, [services, sort])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -49,25 +90,28 @@ export default function ServiceTable({ services }) {
       <div className="card">
         <div className="card-header">
           <span>All Services</span>
-          <span className="text-dim" style={{ fontSize: 12 }}>{allServices.length} total</span>
+          <span className="text-dim" style={{ fontSize: 12 }}>{services.length} total</span>
         </div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Namespace</th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Cluster IP</th>
-                <th>External IP</th>
-                <th>Ports</th>
-                <th>Link</th>
+                {COLS.map(c => (
+                  <th
+                    key={c.key}
+                    className={c.noSort ? '' : `th-sortable ${sort.col === c.key ? 'th-active' : ''}`}
+                    onClick={c.noSort ? undefined : () => toggleSort(c.key)}
+                  >
+                    {c.label}
+                    {!c.noSort && <SortIcon col={c.key} sort={sort} />}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {allServices.length === 0 ? (
+              {sorted.length === 0 ? (
                 <tr><td colSpan={7} className="empty-row">No services found</td></tr>
-              ) : allServices.map(svc => (
+              ) : sorted.map(svc => (
                 <tr key={`${svc.namespace}/${svc.name}`}>
                   <td className="mono text-dim" style={{ fontSize: 12 }}>{svc.namespace}</td>
                   <td>

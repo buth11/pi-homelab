@@ -3,6 +3,16 @@
 .mono { font-family: 'SF Mono', 'Fira Code', monospace; }
 .empty-row { text-align: center; padding: 32px; color: var(--text2); }
 
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.th-sortable:hover { color: var(--text); background: rgba(255,255,255,.04); }
+.th-active { color: var(--accent); }
+.sort-icon { font-size: 11px; margin-left: 4px; opacity: .5; }
+.th-active .sort-icon { opacity: 1; color: var(--accent); }
+
 .node-name { display: flex; align-items: center; gap: 8px; }
 .node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }

@@ -26,7 +26,7 @@ const BUILTIN_ACTIONS = [
     icon: '📊',
     label: 'Grafana',
     description: 'Open Grafana dashboard',
-    link: 'http://192.168.50.50:3000',
+    link: 'http://192.168.50.59:3000',
   },
   {
     id: 'pihole',

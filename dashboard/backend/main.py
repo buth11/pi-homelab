@@ -319,6 +319,7 @@ def get_pods(namespace: Optional[str] = None):
             "restarts": restarts,
             "age": _age_str(pod.status.start_time),
             "ready": f"{sum(1 for c in containers if c.ready)}/{len(containers)}" if containers else "0/0",
+            "containers": [c.name for c in (pod.spec.containers or [])],
         })
     return result
 

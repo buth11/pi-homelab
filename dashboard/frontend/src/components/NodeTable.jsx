@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react'
 import './NodeTable.css'
 
 function ProgressBar({ value, max, colorFn }) {
@@ -24,7 +25,6 @@ function memColor(pct) {
   if (pct > 70) return 'var(--yellow)'
   return 'var(--accent)'
 }
-
 function fmtCpu(m) {
   if (!m && m !== 0) return '—'
   return m >= 1000 ? `${(m / 1000).toFixed(2)}c` : `${m}m`
@@ -34,7 +34,46 @@ function fmtMem(mi) {
   return mi >= 1024 ? `${(mi / 1024).toFixed(1)} GiB` : `${mi} MiB`
 }
 
+const COLS = [
+  { key: 'name',         label: 'Node' },
+  { key: 'status',       label: 'Status' },
+  { key: 'role',         label: 'Role' },
+  { key: 'ip',           label: 'IP' },
+  { key: 'version',      label: 'Version' },
+  { key: 'cpu_used_m',   label: 'CPU' },
+  { key: 'mem_used_mi',  label: 'Memory' },
+]
+
+function SortIcon({ col, sort }) {
+  if (sort.col !== col) return <span className="sort-icon sort-none">⇅</span>
+  return sort.dir === 1
+    ? <span className="sort-icon sort-asc">↑</span>
+    : <span className="sort-icon sort-desc">↓</span>
+}
+
 export default function NodeTable({ nodes }) {
+  const [sort, setSort] = useState({ col: null, dir: 1 })
+
+  function toggleSort(col) {
+    setSort(s => {
+      if (s.col !== col) return { col, dir: 1 }
+      if (s.dir === 1) return { col, dir: -1 }
+      return { col: null, dir: 1 }
+    })
+  }
+
+  const sorted = useMemo(() => {
+    if (!sort.col) return nodes
+    return [...nodes].sort((a, b) => {
+      const av = a[sort.col] ?? ''
+      const bv = b[sort.col] ?? ''
+      const cmp = typeof av === 'number' && typeof bv === 'number'
+        ? av - bv
+        : String(av).localeCompare(String(bv))
+      return sort.dir * cmp
+    })
+  }, [nodes, sort])
+
   return (
     <div className="card">
       <div className="card-header">
@@ -47,19 +86,21 @@ export default function NodeTable({ nodes }) {
         <table>
           <thead>
             <tr>
-              <th>Node</th>
-              <th>Status</th>
-              <th>Role</th>
-              <th>IP</th>
-              <th>Version</th>
-              <th>CPU</th>
-              <th>Memory</th>
+              {COLS.map(c => (
+                <th
+                  key={c.key}
+                  className={`th-sortable ${sort.col === c.key ? 'th-active' : ''}`}
+                  onClick={() => toggleSort(c.key)}
+                >
+                  {c.label} <SortIcon col={c.key} sort={sort} />
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {nodes.length === 0 ? (
+            {sorted.length === 0 ? (
               <tr><td colSpan={7} className="empty-row">No nodes found</td></tr>
-            ) : nodes.map(node => (
+            ) : sorted.map(node => (
               <tr key={node.name}>
                 <td>
                   <div className="node-name">
