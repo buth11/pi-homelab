@@ -14,6 +14,8 @@ spec:
         app: dashboard-backend
     spec:
       serviceAccountName: dashboard-backend
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       # Pin to pi4-master — must NOT run on g3-worker3 which this pod shuts down
       affinity:
         nodeAffinity:
