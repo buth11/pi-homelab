@@ -179,6 +179,7 @@ function GroupHeader({ ns, pods, expanded, onToggle }) {
 
 export default function PodTable({ pods, onViewLogs, onRefresh }) {
   const [nsFilter,    setNsFilter]    = useState('')
+  const [nodeFilter,  setNodeFilter]  = useState('')
   const [search,      setSearch]      = useState('')
   const [confirming,  setConfirming]  = useState(null)
   const [sort,        setSort]        = useState({ col: null, dir: 1 })
@@ -186,6 +187,11 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
 
   const namespaces = useMemo(() => {
     const s = new Set(pods.map(p => p.namespace))
+    return Array.from(s).sort()
+  }, [pods])
+
+  const nodes = useMemo(() => {
+    const s = new Set(pods.map(p => p.node).filter(Boolean))
     return Array.from(s).sort()
   }, [pods])
 
@@ -215,11 +221,12 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
 
   const filtered = useMemo(() => {
     return pods.filter(p => {
-      if (nsFilter && p.namespace !== nsFilter) return false
+      if (nsFilter   && p.namespace !== nsFilter) return false
+      if (nodeFilter && p.node      !== nodeFilter) return false
       if (search && !`${p.namespace}/${p.name}`.toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
-  }, [pods, nsFilter, search])
+  }, [pods, nsFilter, nodeFilter, search])
 
   const sortedFiltered = useMemo(() => {
     if (!sort.col) return filtered
@@ -268,6 +275,12 @@ export default function PodTable({ pods, onViewLogs, onRefresh }) {
             <option value="">All namespaces</option>
             {namespaces.map(ns => (
               <option key={ns} value={ns}>{ns}</option>
+            ))}
+          </select>
+          <select value={nodeFilter} onChange={e => setNodeFilter(e.target.value)}>
+            <option value="">All nodes</option>
+            {nodes.map(n => (
+              <option key={n} value={n}>{n}</option>
             ))}
           </select>
           <span className="text-dim" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>

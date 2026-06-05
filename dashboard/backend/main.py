@@ -335,10 +335,10 @@ def get_services():
     # Ports that are NOT web UIs — skip URL generation for these
     NON_WEB_PORTS = {53, 67, 68, 9100, 9090}
 
-    # Force a specific port for services whose first port is not the web UI
+    # Force a specific port and/or protocol for named services
     # key = substring matched against service name (lowercase)
     WEB_PORT_OVERRIDE = {
-        "firefox": 3001,
+        "firefox": (3001, "https"),
     }
 
     result = []
@@ -357,10 +357,12 @@ def get_services():
 
             # Check explicit override first
             web_port = None
-            for pattern, forced_port in WEB_PORT_OVERRIDE.items():
+            scheme = "http"
+            for pattern, (forced_port, forced_scheme) in WEB_PORT_OVERRIDE.items():
                 if pattern in svc_name_lower:
                     if any(p["port"] == forced_port for p in ports):
                         web_port = forced_port
+                        scheme = forced_scheme
                     break
 
             # Fall back to first TCP port that is not a known non-web port
@@ -371,7 +373,7 @@ def get_services():
                         break
 
             if web_port is not None:
-                url = f"http://{ext_ip}:{web_port}" if web_port != 80 else f"http://{ext_ip}"
+                url = f"{scheme}://{ext_ip}:{web_port}" if web_port != 80 else f"{scheme}://{ext_ip}"
 
         result.append({
             "namespace": svc.metadata.namespace,
