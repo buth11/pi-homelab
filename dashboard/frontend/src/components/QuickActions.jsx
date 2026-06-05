@@ -125,6 +125,7 @@ export default function QuickActions({ pods, onRefresh }) {
   const [result, setResult] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [startStatus, setStartStatus] = useState(null)
+  const [stopStatus,  setStopStatus]  = useState(null)
 
   const loadCustom = async () => {
     const r = await fetch('/api/custom-actions')
@@ -150,6 +151,22 @@ export default function QuickActions({ pods, onRefresh }) {
     return () => clearInterval(id)
   }, [running['start-media']])
 
+  // Poll stop-media status when running
+  useEffect(() => {
+    if (!running['stop-media']) return
+    const id = setInterval(async () => {
+      const r = await fetch('/api/action/stop-media/status')
+      const s = await r.json()
+      setStopStatus(s)
+      if (s.state === 'done' || s.state === 'error') {
+        setRunning(prev => ({ ...prev, 'stop-media': false }))
+        onRefresh()
+        clearInterval(id)
+      }
+    }, 3000)
+    return () => clearInterval(id)
+  }, [running['stop-media']])
+
   const runBuiltin = async (action) => {
     if (action.link) {
       window.open(action.link, '_blank')
@@ -159,11 +176,14 @@ export default function QuickActions({ pods, onRefresh }) {
 
     setRunning(prev => ({ ...prev, [action.id]: true }))
     if (action.id === 'start-media') setStartStatus({ state: 'starting', log: [] })
+    if (action.id === 'stop-media')  setStopStatus({ state: 'starting', log: [] })
+
+    const isAsync = action.id === 'start-media' || action.id === 'stop-media'
 
     try {
       const r = await fetch(action.endpoint, { method: action.method })
       const data = await r.json()
-      if (action.id !== 'start-media') {
+      if (!isAsync) {
         setResult({ title: action.label, data })
         setRunning(prev => ({ ...prev, [action.id]: false }))
         onRefresh()
@@ -210,6 +230,14 @@ export default function QuickActions({ pods, onRefresh }) {
               <div className="status-log">
                 <div className={`status-state state-${startStatus.state}`}>{startStatus.state}</div>
                 {startStatus.log?.slice(-3).map((l, i) => (
+                  <div key={i} className="status-line">{l}</div>
+                ))}
+              </div>
+            )}
+            {action.id === 'stop-media' && stopStatus && (
+              <div className="status-log">
+                <div className={`status-state state-${stopStatus.state}`}>{stopStatus.state}</div>
+                {stopStatus.log?.slice(-3).map((l, i) => (
                   <div key={i} className="status-line">{l}</div>
                 ))}
               </div>

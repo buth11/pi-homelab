@@ -155,6 +155,92 @@ def _drain_node(node_name: str) -> dict:
     return {"evicted": evicted, "skipped": skipped, "errors": errors}
 
 # ---------------------------------------------------------------------------
+# Background task: stop media
+# ---------------------------------------------------------------------------
+
+_stop_media_status: dict = {"state": "idle", "log": []}
+
+# Namespaces already being shut down — don't count their pods as "blocking"
+_DRAIN_SKIP_NS = {"qbittorrent", "jellyfin"}
+
+async def _wait_until_node_empty(node_name: str, log: list, timeout: int = 300) -> bool:
+    """Poll until no evictable, non-terminating pods remain on the node."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        await asyncio.sleep(5)
+        try:
+            pod_list = _v1().list_pod_for_all_namespaces(
+                field_selector=f"spec.nodeName={node_name}"
+            )
+            remaining = []
+            for pod in pod_list.items:
+                ns = pod.metadata.namespace
+                if ns in _DRAIN_SKIP_NS:
+                    continue
+                owners = pod.metadata.owner_references or []
+                if any(o.kind == "DaemonSet" for o in owners):
+                    continue
+                if pod.metadata.deletion_timestamp:
+                    continue  # already terminating
+                phase = pod.status.phase or "Unknown"
+                if phase in ("Running", "Pending", "Unknown"):
+                    remaining.append(f"{ns}/{pod.metadata.name}")
+            if not remaining:
+                log.append("All evictable pods have left the node.")
+                return True
+            names = ", ".join(remaining[:4]) + ("…" if len(remaining) > 4 else "")
+            log.append(f"Still waiting for {len(remaining)} pod(s): {names}")
+        except Exception as exc:
+            log.append(f"Error checking pods: {exc}")
+    log.append("Timeout — proceeding anyway.")
+    return False
+
+async def _stop_media_bg():
+    global _stop_media_status
+    log = []
+    _stop_media_status = {"state": "running", "log": log}
+    try:
+        # 1. Scale down media deployments
+        for ns, dep in [("qbittorrent", "qbittorrent"), ("jellyfin", "jellyfin")]:
+            try:
+                _apps().patch_namespaced_deployment_scale(dep, ns, {"spec": {"replicas": 0}})
+                log.append(f"Scaled down {ns}/{dep}.")
+            except Exception as exc:
+                log.append(f"Warning scaling {ns}/{dep}: {exc}")
+
+        await asyncio.sleep(5)
+
+        # 2. Cordon + evict
+        log.append(f"Draining {G3_NODE_NAME}…")
+        try:
+            dr = _drain_node(G3_NODE_NAME)
+            log.append(
+                f"Evicted {len(dr['evicted'])} pod(s), "
+                f"skipped {len(dr['skipped'])} (DaemonSet)."
+            )
+            if dr["errors"]:
+                log.append(f"Eviction errors: {dr['errors']}")
+        except Exception as exc:
+            log.append(f"Drain error: {exc}")
+
+        # 3. Wait for rescheduled pods to leave the node
+        log.append("Waiting for pods to reschedule on other nodes…")
+        await _wait_until_node_empty(G3_NODE_NAME, log, timeout=300)
+
+        # 4. SSH shutdown
+        log.append(f"Sending shutdown to {G3_HOST}…")
+        try:
+            _ssh_exec(G3_HOST, G3_USER, "sudo shutdown -h now")
+            log.append("Shutdown command sent. G3 is powering off.")
+        except Exception as exc:
+            log.append(f"SSH error: {exc}")
+
+        _stop_media_status["state"] = "done"
+    except Exception as exc:
+        log.append(f"Fatal: {exc}")
+        _stop_media_status["state"] = "error"
+
+# ---------------------------------------------------------------------------
 # Background task: start media
 # ---------------------------------------------------------------------------
 
@@ -455,32 +541,17 @@ def ssh_command(host: str, body: SSHBody):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/action/stop-media")
-async def stop_media():
-    results = {}
+async def stop_media(background_tasks: BackgroundTasks):
+    global _stop_media_status
+    if _stop_media_status.get("state") == "running":
+        return {"ok": False, "message": "Stop-media already running"}
+    _stop_media_status = {"state": "starting", "log": []}
+    background_tasks.add_task(_stop_media_bg)
+    return {"ok": True, "message": "Stop media sequence started"}
 
-    for ns, dep in [("qbittorrent", "qbittorrent"), ("jellyfin", "jellyfin")]:
-        try:
-            _apps().patch_namespaced_deployment_scale(dep, ns, {"spec": {"replicas": 0}})
-            results[f"scale_{dep}"] = "scaled to 0"
-        except Exception as exc:
-            results[f"scale_{dep}"] = f"error: {exc}"
-
-    # Brief wait for pods to begin terminating
-    await asyncio.sleep(5)
-
-    try:
-        drain_result = _drain_node(G3_NODE_NAME)
-        results["drain"] = drain_result
-    except Exception as exc:
-        results["drain"] = f"error: {exc}"
-
-    try:
-        ssh_result = _ssh_exec(G3_HOST, G3_USER, "sudo shutdown -h now")
-        results["ssh_shutdown"] = ssh_result
-    except Exception as exc:
-        results["ssh_shutdown"] = f"error: {exc}"
-
-    return {"ok": True, "results": results}
+@app.get("/api/action/stop-media/status")
+def stop_media_status():
+    return _stop_media_status
 
 # ---------------------------------------------------------------------------
 # Start Media (WoL + wait + scale up)
