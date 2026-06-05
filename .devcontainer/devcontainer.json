@@ -19,11 +19,17 @@
         "ms-azuretools.vscode-docker",
         "hashicorp.terraform",
         "github.vscode-github-actions",
-        "redhat.vscode-yaml"
+        "redhat.vscode-yaml",
+        "anthropic.claude-code"
       ]
     }
   },
-  "postCreateCommand": "pip install ansible && kubectl version --client",
+  "forwardPorts": [8000, 5173],
+  "portsAttributes": {
+    "8000": { "label": "Dashboard Backend", "onAutoForward": "silent" },
+    "5173": { "label": "Dashboard Frontend (dev)", "onAutoForward": "silent" }
+  },
+  "postCreateCommand": "pip install ansible && kubectl version --client && pip install -r /workspaces/pi-homelab/dashboard/backend/requirements.txt 2>/dev/null || true",
   "remoteEnv": {
     "KUBECONFIG": "/home/vscode/.kube/config",
     "PI_MASTER_IP": "192.168.50.10",

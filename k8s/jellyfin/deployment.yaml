@@ -15,6 +15,10 @@ spec:
       labels:
         app: jellyfin
     spec:
+      securityContext:
+        supplementalGroups:
+        - 44
+        - 109
       containers:
       - name: jellyfin
         image: jellyfin/jellyfin:latest
@@ -29,6 +33,8 @@ spec:
           mountPath: /config
         - name: media
           mountPath: /media
+        - name: dri
+          mountPath: /dev/dri
       volumes:
       - name: config
         persistentVolumeClaim:
@@ -36,5 +42,9 @@ spec:
       - name: media
         persistentVolumeClaim:
           claimName: jellyfin-media
+      - name: dri
+        hostPath:
+          path: /dev/dri
+          type: Directory
       nodeSelector:
         kubernetes.io/hostname: g3-worker3
