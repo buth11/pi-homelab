@@ -63,3 +63,5 @@ EOF
 git add .
 git commit -m "docs: add CLAUDE.md for Claude Code context"
 git push
+## Dodatkowe serwisy
+- **File Browser**: 192.168.50.51:8080 — przeglądarka plików NAS
