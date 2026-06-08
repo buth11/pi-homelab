@@ -1,27 +1,53 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"name":"shutdown-pods","namespace":"default"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"command":["/bin/sh","-c","echo \"Stopping pods...\"\nkubectl scale deployment qbittorrent -n qbittorrent --replicas=0\nkubectl scale deployment jellyfin -n jellyfin --replicas=0\necho \"Pods stopped.\"\n"],"image":"bitnami/kubectl:latest","name":"shutdown"}],"nodeSelector":{"kubernetes.io/hostname":"pi4-master"},"restartPolicy":"OnFailure","serviceAccountName":"shutdown-sa"}}}},"schedule":"55 22 * * *","timeZone":"Europe/Warsaw"}}
+  creationTimestamp: "2026-06-02T20:21:11Z"
+  generation: 2
   name: shutdown-pods
   namespace: default
+  resourceVersion: "703360"
+  uid: 6cb281cf-6187-48e1-8e77-13e433c9b389
 spec:
-  schedule: "55 22 * * *"
-  timeZone: "Europe/Warsaw"
+  concurrencyPolicy: Allow
+  failedJobsHistoryLimit: 1
   jobTemplate:
+    metadata: {}
     spec:
       template:
+        metadata: {}
         spec:
-          serviceAccountName: shutdown-sa
           containers:
-          - name: shutdown
-            image: bitnami/kubectl:latest
-            command:
+          - command:
             - /bin/sh
             - -c
             - |
               echo "Stopping pods..."
               kubectl scale deployment qbittorrent -n qbittorrent --replicas=0
               kubectl scale deployment jellyfin -n jellyfin --replicas=0
+              kubectl scale deployment filebrowser -n jellyfin --replicas=0
               echo "Pods stopped."
-          restartPolicy: OnFailure
+            image: bitnami/kubectl:latest
+            imagePullPolicy: Always
+            name: shutdown
+            resources: {}
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
           nodeSelector:
             kubernetes.io/hostname: pi4-master
+          restartPolicy: OnFailure
+          schedulerName: default-scheduler
+          securityContext: {}
+          serviceAccount: shutdown-sa
+          serviceAccountName: shutdown-sa
+          terminationGracePeriodSeconds: 30
+  schedule: 55 22 * * *
+  successfulJobsHistoryLimit: 3
+  suspend: false
+  timeZone: Europe/Warsaw
+status:
+  lastScheduleTime: "2026-06-07T20:55:00Z"
+  lastSuccessfulTime: "2026-06-07T20:55:07Z"
