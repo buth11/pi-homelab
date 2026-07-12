@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: filebrowser-downloads
+  namespace: jellyfin
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: smb-tank-bulk-downloads
+  resources:
+    requests:
+      storage: 500Gi

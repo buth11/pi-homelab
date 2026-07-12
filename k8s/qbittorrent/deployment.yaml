@@ -62,7 +62,7 @@ spec:
           claimName: qbittorrent-config-local
       - name: downloads
         persistentVolumeClaim:
-          claimName: qbittorrent-downloads-local
+          claimName: qbittorrent-downloads-tank-bulk
       - name: firefox-config
         persistentVolumeClaim:
           claimName: qbittorrent-firefox-config

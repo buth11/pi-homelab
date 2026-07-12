@@ -1,7 +1,7 @@
-# Replaces the original qbittorrent-config-nas / qbittorrent-downloads-nas PVCs
-# (backed by the now-decommissioned ASUS router SMB share, nas-smb StorageClass).
-# qBittorrent and its Firefox/noVNC sidecar are pinned to g3-worker3 via
-# nodeSelector, so local-path is sufficient — no network storage is needed.
+# Local-path PVCs for state pinned to g3-worker3 (config, Firefox profile).
+# Downloads live on TrueNAS (tank-bulk/downloads) instead -- see
+# storageclass-downloads.yaml -- so they're reachable from FileBrowser too
+# and aren't tied to this one node's local disk.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -15,20 +15,7 @@ spec:
     requests:
       storage: 5Gi
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: qbittorrent-downloads-local
-  namespace: qbittorrent
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: local-path
-  resources:
-    requests:
-      storage: 100Gi
----
-# Firefox/noVNC profile (bookmarks, session, history) — was emptyDir and lost
+# Firefox/noVNC profile (bookmarks, session, history) -- was emptyDir and lost
 # on every pod restart until 2026-07-11/12.
 apiVersion: v1
 kind: PersistentVolumeClaim

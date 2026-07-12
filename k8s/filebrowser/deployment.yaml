@@ -28,6 +28,8 @@ spec:
           mountPath: /srv
         - name: config
           mountPath: /config
+        - name: downloads
+          mountPath: /srv/Downloads
       volumes:
       - name: media
         persistentVolumeClaim:
@@ -35,3 +37,6 @@ spec:
       - name: config
         persistentVolumeClaim:
           claimName: filebrowser-config
+      - name: downloads
+        persistentVolumeClaim:
+          claimName: filebrowser-downloads
