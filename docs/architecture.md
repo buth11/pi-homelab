@@ -1,6 +1,6 @@
 # Architecture
 
-> Last updated: 2026-07-11
+> Last updated: 2026-07-12
 > This document describes the infrastructure layers added on top of the original
 > K3s Raspberry Pi cluster: a dedicated hypervisor/storage tier (Proxmox + TrueNAS),
 > its integration with K3s and Proxmox, and a Home Assistant / Zigbee smart-home
@@ -103,6 +103,7 @@ split into three pools:
 | `tank-fast/vm-storage` | 32K | lz4 | off | Proxmox VM disks, NFS export |
 | `tank-fast/k3s-pv` | 16K | lz4 | off | K3s PersistentVolumes, SMB export |
 | `tank-bulk/media` | 1M | lz4 | off | Jellyfin media library, SMB export |
+| `tank-bulk/downloads` | 1M | lz4 | off | qBittorrent working directory, SMB export -- deliberately separate from `media` (see §4.2) |
 | `tank-bulk/backups` | 128K | lz4 | off | General-purpose backup target |
 | `scratch-nvme/workdir` | 128K (default) | lz4 | off | Scratch space |
 
@@ -127,6 +128,17 @@ original `nas-smb` (ASUS router SMB share) StorageClass:
 |---|---|---|---|
 | `smb-tank-fast` | `//192.168.50.21/k3s-pv` | Delete | (validation PVC only) |
 | `smb-tank-bulk-media` | `//192.168.50.21/media` | Retain | `jellyfin-media-v2` |
+| `smb-tank-bulk-downloads` | `//192.168.50.21/downloads` | Retain | `qbittorrent-downloads-tank-bulk`, `filebrowser-downloads` |
+
+`downloads` is a separate dataset/share from `media`, not a subfolder of it,
+so that Jellyfin's library scanner never sees in-progress or partial
+torrent downloads. Completed downloads are moved into `media` manually
+(or by future automation). Two independent PVCs, in two different
+namespaces (`qbittorrent` and `jellyfin`), point at the same underlying
+SMB share -- PersistentVolumeClaims are namespace-scoped, so a PVC can't
+be referenced across namespaces even when the backing storage is a shared
+network resource; each consumer needs its own PVC against the same
+StorageClass/source.
 
 SMB (rather than NFS) was chosen for K3s storage for operational
 consistency with the pre-existing `nas-smb` StorageClass, rather than
@@ -182,7 +194,9 @@ Migration approach:
 Deliberately **excluded** from migration: `torrents` / `qBittorrent`
 folders -- these are the download client's working directory, with a
 different lifecycle than the curated media library, and are not part of
-the Jellyfin-facing dataset.
+the Jellyfin-facing dataset. (qBittorrent's own working directory was
+later given its own dedicated dataset, `tank-bulk/downloads` -- see §3.2
+and §4.2 -- rather than being pointed at any of these old ASUS folders.)
 
 After migration, `jellyfin` and `filebrowser` Deployments (previously
 pointing at the now-decommissioned `nas-smb`/ASUS PVC) were re-pointed at
@@ -256,34 +270,11 @@ even mesh coverage across the flat. Link quality (LQI) ranged 47-178
 across the fleet; the weakest link (47, kitchen fridge) is a candidate for
 an additional router nearby if it proves unreliable in practice.
 
-## 9. Notable troubleshooting during this phase
 
-A non-exhaustive log of issues hit and resolved, kept here because the
-debugging process is itself part of what this homelab is meant to
-demonstrate:
+## 9. See also
 
-- **Proxmox had no working DNS** (`/etc/resolv.conf` pointed at an
-  unrelated `192.168.1.1`), blocking `wget` of the HAOS image -- fixed by
-  pointing at a working resolver.
-- **ASUS SMB shares are one-share-per-folder**, not one share with
-  subfolders -- `mount -t cifs //router/New_Volume` doesn't exist as such;
-  discovered via `smbclient -L`.
-- **CIFS mount `error(13)` Permission denied** traced to the SMB user
-  lacking per-folder share permissions on the router side (not a
-  mount-options problem).
-- **Jellyfin/FileBrowser stuck in `ContainerCreating`** after an unrelated
-  physical disk swap severed the old `nas-smb` mount -- resolved by
-  provisioning new SMB-backed PVCs and patching the Deployments' volume
-  claims, rather than trying to resurrect the dead mount.
-- **Zigbee2MQTT onboarding form silently reset** the adapter/port
-  selection on page reload, causing `zigbee-herdsman` to fail adapter
-  auto-discovery -- worked around by setting the adapter/port explicitly
-  via the onboarding wizard's dedicated "Serial" tab instead of the
-  auto-populated main tab.
-- **`ember` adapter failed to initialize** the Zigbee radio (`ASH`
-  handshake reset loop, `HOST_FATAL_ERROR`) despite the dongle's
-  multiprotocol marketing -- `zstack` worked on the first try.
-- **Jellyfin playback failure on one file** traced to the file living in
-  the deliberately-unmigrated `torrents` folder, not a storage or codec
-  issue; confirmed healthy by testing playback from the migrated library
-  instead.
+Real-world incidents hit while building and operating this stack, and how
+they were diagnosed and fixed, are tracked separately in
+[docs/troubleshooting.md](troubleshooting.md) rather than here -- this
+document describes the system's current, stable shape; that one is a
+running log of what went wrong along the way.
