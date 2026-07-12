@@ -59,12 +59,13 @@ spec:
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: qbittorrent-config-nas
+          claimName: qbittorrent-config-local
       - name: downloads
         persistentVolumeClaim:
-          claimName: qbittorrent-downloads-nas
+          claimName: qbittorrent-downloads-local
       - name: firefox-config
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: qbittorrent-firefox-config
 
       nodeSelector:
         kubernetes.io/hostname: g3-worker3

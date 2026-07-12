@@ -13,7 +13,8 @@ spec:
       labels:
         app: filebrowser
     spec:
-      nodeName: g3-worker3
+      nodeSelector:
+        kubernetes.io/hostname: g3-worker3
       containers:
       - name: filebrowser
         image: filebrowser/filebrowser:latest
@@ -30,6 +31,7 @@ spec:
       volumes:
       - name: media
         persistentVolumeClaim:
-          claimName: jellyfin-media
+          claimName: jellyfin-media-v2
       - name: config
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: filebrowser-config
