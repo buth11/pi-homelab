@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radarr
+  namespace: arr
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: radarr } }
+  template:
+    metadata: { labels: { app: radarr } }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: g3-worker3
+      containers:
+      - name: radarr
+        image: lscr.io/linuxserver/radarr:latest
+        env:
+        - { name: PUID, value: "1000" }
+        - { name: PGID, value: "1000" }
+        - { name: TZ, value: "Europe/Warsaw" }
+        ports: [{ containerPort: 7878, name: webui }]
+        volumeMounts:
+        - { name: config, mountPath: /config }
+        - { name: downloads, mountPath: /downloads }
+        - { name: media, mountPath: /media }
+      volumes:
+      - name: config
+        persistentVolumeClaim: { claimName: radarr-config }
+      - name: downloads
+        persistentVolumeClaim: { claimName: arr-downloads }
+      - name: media
+        persistentVolumeClaim: { claimName: arr-media }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: radarr
+  namespace: arr
+spec:
+  type: LoadBalancer
+  selector: { app: radarr }
+  ports: [{ port: 7878, targetPort: 7878 }]

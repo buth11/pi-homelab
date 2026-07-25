@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prowlarr-config
+  namespace: arr
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: 1Gi } }
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonarr-config
+  namespace: arr
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: 2Gi } }
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: radarr-config
+  namespace: arr
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: 2Gi } }
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arr-downloads
+  namespace: arr
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources: { requests: { storage: 10Gi } }
+  storageClassName: smb-tank-bulk-downloads
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arr-media
+  namespace: arr
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources: { requests: { storage: 10Gi } }
+  storageClassName: smb-tank-bulk-media

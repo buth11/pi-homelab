@@ -347,3 +347,219 @@ Also worth remembering for any future CIFS-backed PV: if a file
 deleted/changed by a different client isn't showing up after a reasonable
 propagation window, suspect the dentry cache before suspecting the
 application.
+## 2026-07-25 -- qBittorrent port drift, Syncthing node migration, CIFS mojibake and stale dentry cache
+
+A single day covering three unrelated incidents, kept together because two
+of them (Syncthing config loss, stale CIFS cache) were only discovered
+*because of* migrating Syncthing off `pi4-worker2` for CPU headroom -- each
+fix exposed the next problem.
+
+- **qBittorrent: dozens of peers, 0 B/s transfer, healthy WireGuard
+  handshake.** A healthy tunnel only proves outbound connectivity --
+  ProtonVPN's NAT-PMP-forwarded port had rotated after a tunnel restart,
+  and qBittorrent's `Listening Port` setting doesn't auto-follow it (UPnP/
+  NAT-PMP was off in Options -> Connection). Peers could see the swarm
+  entry but not complete an inbound connection on the now-stale port.
+  Fixed by manually updating `Listening Port` to the currently-forwarded
+  one; transfer resumed after ~15-30 min once tracker/DHT/PEX propagated
+  it. A `natpmpc`-based systemd timer that re-checks the forwarded port
+  and pushes it to qBittorrent's WebUI API on change is designed but not
+  yet deployed -- see `setup/05-qbittorrent-vpn.md`.
+
+### Editing a config file on a volume a live process owns races the process itself
+
+**Symptom:** a `sed`-edited setting in `qBittorrent.conf`
+(`WebUI\ServerDomains`) verified correct immediately after editing, but
+reverted after `kubectl rollout restart` -- repeatedly, across three
+separate attempts.
+
+**Root cause:** the running process rewrites its own config file from
+memory on shutdown. Editing the file on disk while the process is still
+alive is a race: whichever write happens last wins, and a graceful
+`SIGTERM` shutdown reliably loses that race in favor of the process's
+stale in-memory state.
+
+Compounded by a second problem discovered along the way: this cluster had
+accumulated **three different PVCs all plausibly named for qBittorrent's
+config** across earlier migrations (`qbittorrent-config` on
+`local-path`/pi4-worker2, `qbittorrent-config-nas` on SMB,
+`qbittorrent-config-local` on `local-path`/g3-worker3). Editing the wrong
+one wasted significant time -- `kubectl get deployment ... -o yaml`'s
+`last-applied-configuration` annotation reflected an older manifest, not
+the live one, and pointed at a PVC the Deployment no longer actually used.
+
+**Fix:**
+- To find the volume actually mounted, don't trust the
+  `last-applied-configuration` annotation -- read the live spec and cross
+  check with what's mounted inside the pod:
+  ```bash
+  kubectl get deployment <name> -n <ns> -o jsonpath='{.spec.template.spec.volumes}' | jq
+  kubectl exec -n <ns> deployment/<name> -- df -h /config
+  ```
+  `df -h` distinguishes a local block device (`/dev/sdX`) from a network
+  mount (reports as `//ip/share`) immediately.
+- Never edit a config file belonging to a process expected to rewrite it
+  on exit while that process is still running. Scale to 0, wait for the
+  pod to be **fully gone** (`kubectl get pods -w` shows nothing -- not
+  just `Terminating`, which can sit for 30s+ under the default grace
+  period), edit on disk, then scale back to 1.
+- Housekeeping debt from this: the two orphaned qBittorrent config PVCs
+  are still sitting in the cluster unreferenced by anything live. Worth an
+  audit pass (`kubectl get pvc -A`) at some point.
+
+### Syncthing config destroyed migrating pi4-worker2 -> Proxmox VM (SMB doesn't support SQLite WAL locking)
+
+**Symptom:** after re-pointing Syncthing's `nodeSelector` to
+`k3s-burst-worker` (a Proxmox VM, moved there because Syncthing's periodic
+full-tree scans of large `venv`/`.vs`/`node_modules` directories were
+pegging the Pi's CPU -- visible as a correlated ~15W jump on the TrueNAS
+power monitor from the resulting SMB client load), the pod entered an
+infinite crash loop: `ERR Error opening database (error="openbase
+(PRAGMA journal_mode = WAL): database is locked (5) (SQLITE_BUSY)")`,
+restarting every second.
+
+**Root cause:** two compounding storage mistakes, both learned the hard
+way rather than checked in advance:
+1. `local-path` PVCs are pinned to the node they were first provisioned on
+   via `nodeAffinity` baked into the PV -- they don't follow a
+   `nodeSelector` change on the Deployment. Migrating the Deployment
+   without migrating the underlying storage class first left the new pod
+   unschedulable.
+2. Attempting to fix that by moving the config PVC onto the
+   `smb-tank-bulk-syncthing` StorageClass broke Syncthing outright.
+   Syncthing 2.x stores its index in SQLite with `journal_mode=WAL`, which
+   requires real POSIX file locking -- CIFS/SMB doesn't reliably provide
+   this, hence the permanent `SQLITE_BUSY`.
+3. During cleanup, the original `local-path` PVC was deleted along with
+   its PV (`reclaimPolicy: Delete` on `local-path`, unlike the `Retain`
+   policy on the SMB-backed classes -- see architecture.md §4.2), which
+   destroyed the config -- Device ID, all peer pairings, folder
+   definitions -- with no way back.
+
+**Fix:** provisioned a fresh `local-path` PVC
+(`syncthing-config-local`) already targeting `k3s-burst-worker`, and
+pointed the Deployment's `config` volume at it instead of the SMB class.
+**Rule going forward: Syncthing's (or any SQLite-WAL-backed app's) config/
+database must live on `local-path` or another volume with real POSIX
+locking -- never on `smb-tank-*`.** Only the synced *data* itself is safe
+on SMB.
+
+**Lesson for next time:** losing the config wasn't data loss for the
+synced files (`syncthing-data` on SMB was untouched throughout) -- Syncthing
+re-indexes existing files by hash rather than re-downloading them once a
+folder is re-added at the same path. It *did* cost real re-pairing work
+with every peer device (new Device ID), and -- more consequentially -- it
+forced a from-scratch full rescan of both folders, which is what surfaced
+the mojibake filename problem below at full scale instead of gradually.
+When migrating a `local-path`-backed workload to a new node in future,
+provision the new node's PVC *first*, verify it schedules and mounts
+cleanly, and only then decide whether the old PVC/PV is safe to delete --
+don't delete-then-recreate under time pressure.
+
+### Double-encoded (mojibake) Polish filenames on the TrueNAS SMB shares
+
+**Symptom:** Syncthing's from-scratch rescan (triggered by the config loss
+above) surfaced `scan: item is not in UTF8 encoding` and `hashing: open
+...: no such file or directory` for files with Polish diacritics (ą, ę, ż,
+ń, ś, ó) in the name, across two shares (`Projects` and `Syncthing`).
+`ls` displays the broken names with a literal `?` where the letter should
+be.
+
+**Root cause:** at some point files were copied through a tool that
+mis-interpreted already-valid UTF-8 bytes as Windows-1252/Latin-1 and
+re-encoded them -- a double-encoding bug. This leaves a second, garbled
+*duplicate* of the filename sitting next to the correctly-encoded original
+(byte-identical content, different name). `convmv -f windows-1250 -t utf8`
+reports these as "already UTF-8" and does nothing, because they technically
+are valid UTF-8 -- just the wrong UTF-8 -- so this isn't a `convmv`-fixable
+encoding mismatch, it's stray duplicate files to find and remove.
+
+**Diagnosis method:**
+```bash
+# see real bytes instead of terminal-mangled "?" placeholders
+find "<path>" -type f | cat -v
+# spot pairs by length -- the mojibake name is always longer than the healthy one
+find "<path>" -type f -printf '%f\n' | awk '{ print length, $0 }' | sort -n
+```
+Before deleting anything, confirm the pair is byte-identical using shell
+globs or array expansion so the shell resolves the actual bytes --
+**never hand-type or copy/paste the broken filename into a command**,
+both mangle multi-byte sequences further:
+```bash
+files=(Strona*Biznesowy.html)   # shell resolves real bytes via glob
+diff -q "${files[0]}" "${files[1]}"
+```
+
+**Fix applied** (scoped to the `Projects` folder, ~64 files across
+`Bujalski/E/db/W toku/` and `AnalitykBiznesowy_AI_Team_v2/gsc-exports/`):
+for every healthy filename, `diff -q` it against every longer candidate
+name in the same directory; only delete a candidate that diffed
+byte-identical. `rm`, not rename -- a valid healthy copy already existed
+in every case found.
+
+**Still open:** the same pattern exists at much larger scale in the
+second Syncthing folder (`02_Dev`, `03_Osobiste`, `01_Praca` --
+hundreds of files, mostly old Visual Studio build artifacts and personal
+documents). These currently sit as non-blocking `WRN Failed to scan`
+warnings -- the rest of each folder syncs fine around them. For the VS
+build-artifact trees specifically (`.vs/`, `bin/`, `obj/`, `.suo`), adding
+them to Syncthing's ignore patterns is probably the better fix over
+repairing their names, since they're disposable build output anyway.
+
+### CIFS directory-listing cache survives pod restart and `drop_caches`, needs a forced remount
+
+**Symptom:** after deleting the mojibake duplicates above directly on the
+TrueNAS share from a different client, Syncthing on `k3s-burst-worker`
+kept re-reporting the exact same "already fixed" files as errors --
+surviving a full `db/scan` API call, a pod restart via `kubectl rollout
+restart`, and `echo 3 > /proc/sys/vm/drop_caches` run inside a `kubectl
+debug node/... --image=busybox -- chroot /host bash` session. `errors`
+count via the Syncthing REST API stayed at a stubborn 66 through all of
+it, with `state: idle` -- meaning Syncthing genuinely believed a fresh
+scan still saw these files.
+
+**Root cause:** the CSI SMB mount's `actimeo=1` option only bounds
+*attribute* cache TTL (file size, mtime), not the CIFS **directory entry
+cache** under `cache=strict` mode. This cache is scoped to the **node's
+kernel**, not the pod -- the mount is a `globalmount` that a new pod
+schedules onto and reuses as-is, so a pod restart never touches it. And
+`chroot /host` inside a `kubectl debug` session changes the *visible root
+filesystem* but not the *mount namespace* -- writing
+`/proc/sys/vm/drop_caches` there doesn't reliably reach the host's actual
+page/dentry cache, which is why that attempt did nothing.
+
+**Fix:** force-unmount the stale `globalmount` and let the CSI driver
+recreate it clean on next schedule.
+```bash
+# 1. scale to 0 so nothing holds the mount open
+kubectl scale deployment <name> -n <ns> --replicas=0
+kubectl get pods -n <ns> -w    # wait for full removal
+
+# 2. get a shell actually inside the host's namespaces -- plain chroot
+#    is not enough for unmount; need nsenter into PID 1's namespaces,
+#    which needs a privileged debug profile
+kubectl debug node/<node> -it --image=busybox --profile=sysadmin \
+  -- nsenter -t 1 -m -u -i -n -p -- bash
+
+# 3. force-unmount the relevant globalmount(s)
+mount | grep <share-name>
+umount -f /var/lib/kubelet/plugins/kubernetes.io/csi/smb.csi.k8s.io/<hash>/globalmount
+
+# 4. scale back up
+kubectl scale deployment <name> -n <ns> --replicas=1
+```
+Confirmed: `errors` went from 66 (surviving everything else tried) to
+**0** immediately after the forced unmount/remount cycle.
+
+**Lesson for next time:** `kubectl debug node/<x> -it --image=busybox --
+chroot /host bash` is enough for read-only host filesystem inspection
+only. Anything that needs real host privileges -- unmounting, `nsenter`
+into other namespaces, `drop_caches` that actually takes effect -- needs
+`--profile=sysadmin` (or a hand-written pod manifest with `privileged:
+true`), otherwise the command *appears* to succeed (`umount` on a
+`chroot`-only shell fails loudly with "must be superuser", which at least
+makes the gap obvious -- `drop_caches` silently no-ops, which doesn't).
+Also worth remembering for any future CIFS-backed PV: if a file
+deleted/changed by a different client isn't showing up after a reasonable
+propagation window, suspect the dentry cache before suspecting the
+application.

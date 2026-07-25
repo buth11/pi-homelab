@@ -35,6 +35,7 @@ snapshot policy, network segmentation, and the Home Assistant/Zigbee subsystem.
 | GitOps | FluxCD |
 | Smart home | Home Assistant, Zigbee2MQTT, Mosquitto |
 | AI Agents | OpenHands (Hermes stack) |
+| Media automation | Prowlarr, Sonarr, Radarr |
 
 ## Nodes
 
@@ -59,6 +60,7 @@ snapshot policy, network segmentation, and the Home Assistant/Zigbee subsystem.
 - [x] Dedicated storage network (Proxmox ⇄ TrueNAS, 2.5GbE)
 - [x] Periodic ZFS snapshots (VM disks, K3s PVs, media, backups)
 - [x] Home Assistant + Zigbee2MQTT smart-home subsystem
+- [x] Media automation stack (Prowlarr + Sonarr + Radarr, g3-worker3)
 - [ ] Tailscale operator
 - [ ] Prometheus + Grafana + Loki
 - [ ] FluxCD GitOps
@@ -91,3 +93,20 @@ snapshot policy, network segmentation, and the Home Assistant/Zigbee subsystem.
   passthrough; brought up Zigbee2MQTT + Mosquitto and paired 19 Zigbee
   devices (metering smart plugs + temperature/humidity/air-quality sensors)
 
+
+### 2026-07-25
+
+- Deployed a media automation stack (Prowlarr + Sonarr + Radarr) in a new
+  `arr` namespace on `g3-worker3`, wired to the existing qBittorrent
+  downloader and Jellyfin library — see
+  [setup/06-arr-stack.md](setup/06-arr-stack.md)
+- Diagnosed and fixed a ProtonVPN forwarded-port drift breaking
+  qBittorrent transfer despite healthy peer connections
+- Migrated Syncthing from `pi4-worker2` to a Proxmox VM node
+  (`k3s-burst-worker`); recovered from a config-volume storage mistake
+  (SQLite WAL on SMB) and a stale CIFS directory cache — full incident
+  writeups in [docs/troubleshooting.md](docs/troubleshooting.md)
+- Cleaned up ~94 double-encoded (mojibake) duplicate filenames across two
+  Syncthing-managed folders
+- Widened the MetalLB pool (`192.168.50.50-60` → `192.168.50.50-80`),
+  exhausted by the new arr-stack services
