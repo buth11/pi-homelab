@@ -563,3 +563,57 @@ Also worth remembering for any future CIFS-backed PV: if a file
 deleted/changed by a different client isn't showing up after a reasonable
 propagation window, suspect the dentry cache before suspecting the
 application.
+## 2026-07-26 -- Forced unmount from a previous incident left a *different* PV's CIFS mount dead
+
+**Symptom:** the `Syncthing` folder (separate from `Projects`, same Syncthing
+instance) suddenly showed `Niezsynchronizowane` / `permission denied` on
+`stat /data/Syncthing`, and `kubectl exec ... -- ls -la /data/` returned an
+almost-empty directory owned by `root:root` instead of the expected ~78 GiB
+tree. `df -h /data` from inside the pod reported `/dev/sda1` -- a local
+block device -- instead of the `//192.168.50.21/syncthing` CIFS mount.
+
+**Root cause:** yesterday's fix for the stale-dentry-cache incident
+(2026-07-25 entry above) force-unmounted a specific `globalmount` on
+`k3s-burst-worker` to clear a cache problem affecting the `Projects`
+folder. That was the right fix for *that* PV, but `syncthing-data` (the
+PVC backing the `Syncthing` folder) uses the **same node, same CIFS
+share, same StorageClass** (`smb-tank-bulk-syncthing`) via a *separate*
+`globalmount`. `mount | grep syncthing` on the node the next day confirmed
+it: zero CIFS mounts present at all for that share, on either PV. Best
+explanation: the node's `kubelet` didn't notice the PV's bind-mount had
+gone stale until something (the day boundary, a routine scan, or simply
+time) triggered a re-check -- at which point, with no live `globalmount`
+underneath it to bind to, the pod's `/data` silently fell through to the
+node's local filesystem instead of failing loudly.
+
+**Fix:** same pattern as yesterday, but this time no manual `umount -f`
+was even needed -- since nothing was mounted to begin with:
+```bash
+kubectl scale deployment syncthing -n syncthing --replicas=0
+kubectl get pods -n syncthing -w   # wait for full removal
+kubectl scale deployment syncthing -n syncthing --replicas=1
+kubectl exec -n syncthing deployment/syncthing -- df -h /data
+# -> //192.168.50.21/syncthing   11T   70G   11T   1%   /data
+```
+A clean scale-down/scale-up was sufficient to force the CSI driver to
+establish a fresh `globalmount` from scratch.
+
+**Side effect noticed while diagnosing:** `/data`'s root also contained
+Syncthing *config* files (`cert.pem`, `config.xml`, `config.xml.v0`,
+`key.pem`, `syncthing.lock`, `index-v2/`) left over from the brief period
+(2026-07-25) when `syncthing-config-smb` pointed at this same share --
+`smb-tank-bulk-syncthing`'s StorageClass doesn't carve out a distinct
+`subDir` per PVC, so two PVCs against it can silently share the same root
+directory. Harmless since that config PVC is no longer referenced by the
+Deployment, but cleaned up (`rm` the stray files) to avoid confusion on a
+future `ls /data`.
+
+**Lesson for next time:** a force-unmount fix for a CIFS caching problem
+is scoped to *the specific `globalmount` path*, not to the share as a
+whole -- any other PV pointed at the same `source` share, even from the
+same node, needs to be checked (and likely bounced) too, since it's an
+independent `globalmount` under the hood. After any forced CIFS
+unmount/remount, run `mount | grep <share>` on the node and cross-check
+against every PV using that StorageClass (`kubectl get pv -o
+jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.csi.volumeAttributes.source}{"\n"}{end}'`
+| grep <share>`) before considering the incident closed.
