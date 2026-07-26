@@ -716,3 +716,67 @@ manifest saved at `/tmp/pv-syncthing-data-new.yaml` on the dev container
 - This does **not** block normal Syncthing operation. Everything except
   the ~66 (Projects) / ~782 (Syncthing folder) files with diacritics in
   their names syncs correctly. Safe to leave as a known issue.
+## 2026-07-26 (resolution) -- nls_utf8 fix deployed, CIFS mojibake resolved
+
+Picked back up the deferred fix from earlier today. Root cause was
+already confirmed (missing `nls_utf8` kernel module on `k3s-burst-worker`
+causing `iocharset=utf8` mount attempts to fail with `mount error(79):
+Can not access a needed shared library`).
+
+**Fix:**
+```bash
+# on k3s-burst-worker, via a privileged debug pod:
+kubectl debug node/k3s-burst-worker -it --image=busybox --profile=sysadmin \
+  -- nsenter -t 1 -m -u -i -n -p -- bash
+
+apt update
+apt install -y linux-modules-extra-$(uname -r)
+modprobe nls_utf8
+lsmod | grep nls_utf8   # confirms loaded, no reboot needed
+```
+`linux-modules-extra-6.8.0-134-generic` (113 MB) carries `nls_utf8.ko.zst`
+plus a handful of other `nls_*` modules not included in the base
+`linux-modules` package on this Ubuntu 24.04 cloud image. Installing it
+also flagged a pending kernel upgrade (running `134`, latest available
+`136`) -- unrelated to this fix, left for a separate maintenance window
+since a reboot would be needed and nothing here requires it.
+
+With the module loadable, recreated the PV (same delete/patch-finalizer/
+recreate dance as the rest of today, PV name and `claimRef` preserved so
+the existing PVC re-bound automatically) with `iocharset=utf8` explicitly
+set. This time the mount succeeded immediately (pod `Running` in ~2s,
+vs. the earlier attempt that sat in `ContainerCreating` failing
+repeatedly).
+
+**Verification:**
+```bash
+kubectl exec -n syncthing deployment/syncthing -- sh -c \
+  'find ".../Statystyki/" -maxdepth 1 -type f -printf "%f\n" | od -An -tx1'
+```
+now shows `c4 85` (correct UTF-8 `ą`) instead of `3f` (`?`). Both
+folders' error counts dropped to 0 (`Projects`: 66 -> 0, `Syncthing`:
+782 -> 0) within one scan cycle, no further intervention needed.
+
+Also updated `smb-tank-bulk-syncthing` StorageClass's `mountOptions` to
+include `iocharset=utf8` (delete+recreate, since `mountOptions` are
+immutable) so any future PV provisioned against this class inherits the
+fix automatically -- doesn't affect the already-fixed PV, which carries
+its own explicit `mountOptions`.
+
+**Side effect noticed while verifying:** ~121 `.sync-conflict-*` files
+appeared, nearly all inside `AnalitykBiznesowy_AI_Team_v2/.browser-profile/`
+-- a Chrome/Firefox profile that's apparently being synced alongside the
+actual project files. Browser cache/session files change constantly on
+whichever device is active, so this directory generates sync conflicts
+by nature. **Follow-up, not yet done:** add `(?d)**/.browser-profile/` to
+the `Projects` folder's ignore patterns -- this data has no business being
+synced in the first place. One conflict outside that directory
+(`Obudowa_Nas.sync-conflict-...FCStd`, a FreeCAD project file) is a
+genuine conflict worth reviewing by hand rather than blanket-ignoring.
+
+**Status: resolved.** No more known mojibake/encoding issues on this
+share. The `nls_utf8` gap was specific to `k3s-burst-worker`'s Ubuntu
+24.04 cloud image -- worth checking whether the same module is present
+on the other nodes (`pi4-master`, `pi4-worker2`, `g3-worker3`) before
+scheduling any future SMB-mounting workload there, rather than
+rediscovering this the same way.

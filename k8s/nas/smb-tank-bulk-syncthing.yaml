@@ -8,6 +8,7 @@ mountOptions:
   - uid=1000
   - gid=1000
   - vers=3.0
+  - iocharset=utf8
 parameters:
   csi.storage.k8s.io/node-stage-secret-name: smb-tank-fast-secret
   csi.storage.k8s.io/node-stage-secret-namespace: kube-system

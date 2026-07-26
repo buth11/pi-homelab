@@ -29,6 +29,7 @@ spec:
   - uid=1000
   - gid=1000
   - vers=3.0
+  - iocharset=utf8
   persistentVolumeReclaimPolicy: Retain
   storageClassName: smb-tank-bulk-syncthing
   volumeMode: Filesystem
