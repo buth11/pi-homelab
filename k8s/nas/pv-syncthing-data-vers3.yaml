@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pvc-b583fea2-3716-491d-b7c2-cdb9743c06de
+  annotations:
+    pv.kubernetes.io/provisioned-by: smb.csi.k8s.io
+spec:
+  accessModes:
+  - ReadWriteMany
+  capacity:
+    storage: 500Gi
+  claimRef:
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    name: syncthing-data
+    namespace: syncthing
+    uid: b583fea2-3716-491d-b7c2-cdb9743c06de
+  csi:
+    driver: smb.csi.k8s.io
+    nodeStageSecretRef:
+      name: smb-tank-fast-secret
+      namespace: kube-system
+    volumeAttributes:
+      source: //192.168.50.21/syncthing
+    volumeHandle: 192.168.50.21/syncthing#pvc-b583fea2-3716-491d-b7c2-cdb9743c06de##
+  mountOptions:
+  - dir_mode=0777
+  - file_mode=0777
+  - uid=1000
+  - gid=1000
+  - vers=3.0
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: smb-tank-bulk-syncthing
+  volumeMode: Filesystem

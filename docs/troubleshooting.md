@@ -617,3 +617,102 @@ unmount/remount, run `mount | grep <share>` on the node and cross-check
 against every PV using that StorageClass (`kubectl get pv -o
 jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.csi.volumeAttributes.source}{"\n"}{end}'`
 | grep <share>`) before considering the incident closed.
+## 2026-07-26 (cont.) -- Known issue: CIFS mount can't correctly read Polish diacritics in filenames (root cause found, fix not yet deployed)
+
+**Symptom:** ~66-782 files with Polish diacritics in their names (ą, ę, ż,
+ń, ś, ó, ł) consistently show up as Syncthing scan errors
+(`hashing: open ...: no such file or directory`, `scan: item is not in
+UTF8 encoding`) even though:
+- the files are 100% correctly named on disk (verified with a raw hex
+  dump straight off ZFS via the TrueNAS Shell, bypassing Samba entirely --
+  see below)
+- a completely independent CIFS mount from a different client
+  (`pi4-master`, manual `mount -t cifs`) reads the same files correctly
+- the PV backing the mount was fully deleted and recreated from scratch,
+  ruling out any client-side or CSI-level cache
+- SMB protocol version was bumped from 2.0 to 3.0, with zero change in
+  behavior
+
+**Root cause, confirmed step by step:**
+
+1. Hex-dumped the filename bytes as seen by the Syncthing pod:
+   ```bash
+   kubectl exec -n syncthing deployment/syncthing -- sh -c \
+     'find ".../Statystyki/" -maxdepth 1 -type f -printf "%f\n" | od -An -tx1'
+   ```
+   Result: `55 72 7a 3f 64 7a 65 6e 69 61` -- a literal ASCII `3f` (`?`)
+   where `ą` should be.
+
+2. Hex-dumped the *same* filename directly on TrueNAS via the built-in
+   Shell (System Settings -> Shell in the WebUI, since SSH login was
+   disabled), bypassing Samba/CIFS entirely:
+   ```bash
+   find /mnt/tank-bulk/syncthing/Projects/.../Statystyki/ \
+     -maxdepth 1 -type f -printf "%f\n" | od -An -tx1
+   ```
+   Result: `55 72 7a c4 85 64 7a 65 6e 69 61` -- correct UTF-8 (`c4 85` =
+   `ą`). **Confirmed: the data on ZFS is 100% correct.** The corruption
+   happens exclusively in the CIFS layer between server and this specific
+   client.
+
+3. Checked the live `mount` options on the node
+   (`kubectl debug node/... --profile=sysadmin -- nsenter -t 1 -m -u -i
+   -n -p -- bash`, then `mount | grep syncthing`): no `iocharset` option
+   was present at all -- the CIFS kernel module was silently falling back
+   to some default charset that doesn't correctly decode multi-byte UTF-8
+   from this particular Samba server/version combination.
+
+4. Attempted to fix it by explicitly adding `iocharset=utf8` to the PV's
+   `mountOptions` (StorageClass `mountOptions` are immutable after
+   creation -- had to delete and recreate the PV itself, preserving
+   `claimRef` so the existing PVC re-binds automatically without data
+   loss, since `reclaimPolicy: Retain`). Result: **mount failed outright**:
+   ```
+   mount error(79): Can not access a needed shared library
+   ```
+   Root cause of *that*: `find /lib/modules/$(uname -r) -iname
+   "nls_utf8*"` on `k3s-burst-worker` (Ubuntu 24.04.4, kernel
+   `6.8.0-134-generic`) returns nothing -- the `nls_utf8` kernel module
+   genuinely isn't present on this host, only `nls_iso8859_1` and
+   `nls_ucs2_utils` are loaded. Requesting `iocharset=utf8` explicitly
+   makes `mount.cifs` try to load a module that doesn't exist, and it
+   fails loudly instead of silently falling back like it does when the
+   option is omitted.
+
+**Current state (workaround, not a fix):** reverted to `vers=3.0` without
+an explicit `iocharset` -- this mounts successfully and is no worse than
+before (same silent-fallback behavior that produces the `?` corruption
+for diacritics, but at least the mount works and everything else
+syncs normally). PV was deleted and recreated twice today; final working
+manifest saved at `/tmp/pv-syncthing-data-new.yaml` on the dev container
+(not yet committed to the repo -- do that before relying on it, since
+`/tmp` doesn't survive a container rebuild).
+
+**Where to pick this up next time:**
+- The real fix is getting a working `nls_utf8`-equivalent available to
+  the CIFS mount on `k3s-burst-worker`. Options to investigate, roughly
+  in order of how invasive they are:
+  1. Check whether `nls_utf8` ships in a separate package
+     (`linux-modules-extra-6.8.0-134-generic` or similar) that isn't
+     installed -- `apt list --installed | grep linux-modules` only shows
+     the base `linux-modules` packages, not `-extra`.
+  2. If truly unavailable for this kernel, `apt install
+     linux-modules-extra-$(uname -r)` (or the closest available version)
+     and reboot the VM, or `modprobe nls_utf8` after installing to avoid
+     a reboot if the module loads without one.
+  3. Failing that, UTF-8 is arguably CIFS's *implicit* default when no
+     `iocharset` is given on modern kernels -- the real bug may be
+     specifically in how `mount.cifs`/`cifs-utils` on this Ubuntu 24.04
+     image resolves the `iocharset=utf8` request to a module load instead
+     of recognizing UTF-8 as needing no translation module at all. Worth
+     checking `cifs-utils` package version and whether a newer/older
+     version behaves differently before touching kernel modules.
+  4. As a last resort, side-step the whole CIFS layer for this
+     specific need: since `pi4-master`'s manual mount reads the files
+     correctly, compare its exact `mount.cifs` invocation/options against
+     the CSI driver's to find what's actually different beyond
+     `iocharset` (e.g. `vers=`, `sec=`, `nounix`) that makes one client
+     succeed and the other fail.
+- This does **not** block normal Syncthing operation. Everything except
+  the ~66 (Projects) / ~782 (Syncthing folder) files with diacritics in
+  their names syncs correctly. Safe to leave as a known issue.
