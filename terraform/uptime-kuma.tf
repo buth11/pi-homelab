@@ -84,4 +84,7 @@ resource "kubernetes_service" "uptime_kuma" {
       target_port = 3001
     }
   }
+  lifecycle {
+    ignore_changes = [metadata[0].annotations]
+  }
 }
