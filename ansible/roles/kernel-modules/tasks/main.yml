@@ -1,0 +1,66 @@
+---
+- name: Check whether nls_utf8 module file exists on disk
+  ansible.builtin.stat:
+    path: "/lib/modules/{{ ansible_facts['kernel'] }}/kernel/fs/nls/nls_utf8.ko.zst"
+  register: nls_utf8_file_zst
+
+- name: Check whether nls_utf8 module file exists on disk (uncompressed variant)
+  ansible.builtin.stat:
+    path: "/lib/modules/{{ ansible_facts['kernel'] }}/kernel/fs/nls/nls_utf8.ko"
+  register: nls_utf8_file_plain
+
+- name: Set fact for whether nls_utf8 module file is present
+  ansible.builtin.set_fact:
+    nls_utf8_present: "{{ nls_utf8_file_zst.stat.exists or nls_utf8_file_plain.stat.exists }}"
+
+- name: Install linux-modules-extra on Ubuntu when module file is missing
+  ansible.builtin.apt:
+    name: "linux-modules-extra-{{ ansible_facts['kernel'] }}"
+    state: present
+    update_cache: true
+  when:
+    - ansible_facts['distribution'] == "Ubuntu"
+    - not nls_utf8_present
+  register: modules_extra_install
+
+- name: Re-check module file after install attempt
+  ansible.builtin.stat:
+    path: "/lib/modules/{{ ansible_facts['kernel'] }}/kernel/fs/nls/nls_utf8.ko.zst"
+  register: nls_utf8_recheck
+  when: modules_extra_install is changed
+
+- name: Fail loudly if module still missing on Ubuntu after install
+  ansible.builtin.fail:
+    msg: >
+      nls_utf8 module not found for kernel {{ ansible_facts['kernel'] }}
+      on {{ inventory_hostname }} even after installing linux-modules-extra.
+  when:
+    - ansible_facts['distribution'] == "Ubuntu"
+    - not nls_utf8_present
+    - modules_extra_install is changed
+    - not nls_utf8_recheck.stat.exists
+
+- name: Load nls_utf8 kernel module now
+  community.general.modprobe:
+    name: nls_utf8
+    state: present
+  when: nls_utf8_present or (modules_extra_install is defined and modules_extra_install is changed)
+
+- name: Ensure nls_utf8 loads automatically on every boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/nls_utf8.conf
+    content: "nls_utf8\n"
+    mode: "0644"
+  when: nls_utf8_present or (modules_extra_install is defined and modules_extra_install is changed)
+
+- name: Verify nls_utf8 is currently loaded
+  ansible.builtin.command: lsmod
+  register: lsmod_output
+  changed_when: false
+
+- name: Report nls_utf8 status
+  ansible.builtin.debug:
+    msg: >
+      nls_utf8 {{ 'IS' if 'nls_utf8' in lsmod_output.stdout else 'is NOT' }}
+      loaded on {{ inventory_hostname }} (kernel {{ ansible_facts['kernel'] }},
+      distro {{ ansible_facts['distribution'] }})

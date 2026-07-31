@@ -1,0 +1,6 @@
+---
+- name: Ensure CIFS UTF-8 kernel module support across the cluster
+  hosts: k3s_cluster
+  become: true
+  roles:
+    - kernel-modules
