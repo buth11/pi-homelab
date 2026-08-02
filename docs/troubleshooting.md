@@ -809,3 +809,39 @@ diagnosing a resource spike, check actual per-pod/per-process usage
 (`kubectl top`, `ps aux` inside the container) before assuming it's
 whatever was deployed most recently -- the timing coincidence with that
 day's Terraform work was misleading.
+
+## 2026-08-02 -- g3-worker3 power draw +70%, traced via Grafana to stale Firefox sidecar tabs (unrelated to same-day Terraform work)
+
+**Symptom:** Home Assistant power monitor showed `g3-worker3` climbing from
+~9W baseline to a sustained ~17-20W starting 2026-07-26. Initially
+suspected same-day Terraform/MinIO/Uptime Kuma work -- wrong guess, those
+pods were consuming <0.002 cores each.
+
+**Root cause:** the Firefox/Selkies remote-desktop sidecar attached to
+qBittorrent had accumulated browser tabs left open since 2026-07-21 and
+2026-07-25 (`ps aux` inside the container showed several `-contentproc
+... tab` processes dating back days, main firefox process at 1139+
+minutes accumulated CPU). Selkies' video pipeline was correctly idle
+(confirmed via container logs) -- the load was the browser tabs
+themselves, not encoding/streaming.
+
+**Diagnosis path:** initially done the hard way via SSH + `top` +
+`ps aux` on the node. Afterward, cross-checked in Grafana's built-in
+"Kubernetes / Compute Resources / Node (Pods)" dashboard
+(`kube-prometheus-stack` ships this out of the box, no extra
+configuration needed) -- sorted the per-pod CPU table and got a clean,
+quantified confirmation: the stale qBittorrent pod was at 0.284 cores
+vs. 0.055 for the freshly restarted one, ~5x higher than any other pod
+on the node.
+
+**Fix:** `kubectl rollout restart deployment/qbittorrent -n qbittorrent`
+-- node CPU idle went from ~34-42% back to ~89% within minutes.
+
+**Lesson for next time:** this sidecar has no automatic tab-cleanup or
+periodic restart -- close tabs after use, or add a scheduled CronJob to
+restart the deployment weekly. Bigger lesson: **use Grafana's existing
+Node (Pods) dashboard first** for this class of problem instead of
+manual SSH digging -- the data was already there, just not the habit of
+checking it first. A follow-up worth doing: configure a Prometheus alert
+rule (per-pod CPU sustained above a threshold) so this surfaces as a
+notification instead of being noticed a week later on the power monitor.
