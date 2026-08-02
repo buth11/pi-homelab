@@ -1,0 +1,51 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: node-cpu-anomaly
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: node-cpu-baseline
+      interval: 15m
+      rules:
+        - record: node:cpu_usage:current
+          expr: >
+            100 - (
+              avg by (node) (
+                rate(node_cpu_seconds_total{mode="idle"}[5m])
+              ) * 100
+            )
+
+        - record: node:cpu_usage:avg24h
+          expr: >
+            avg_over_time(node:cpu_usage:current[24h])
+
+        - record: node:cpu_usage:avg7d
+          expr: >
+            avg_over_time(node:cpu_usage:current[7d])
+
+        - record: node:cpu_usage:avg_prior6d
+          expr: >
+            (node:cpu_usage:avg7d * 7 - node:cpu_usage:avg24h * 1) / 6
+
+    - name: node-cpu-anomaly-alerts
+      rules:
+        - alert: NodeCPU24hAboveWeeklyBaseline
+          expr: >
+            node:cpu_usage:avg24h
+            > 1.3 * node:cpu_usage:avg_prior6d
+            and node:cpu_usage:avg_prior6d > 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.node }}: last-24h CPU average is 30%+ above the prior 6-day baseline"
+            description: >
+              Node {{ $labels.node }}'s average CPU over the last 24h is
+              {{ $value | humanize }}%, more than 30% above its baseline
+              from the 6 days before that. Check `kubectl top pods -A
+              --sort-by=cpu` or the Grafana "Kubernetes / Compute
+              Resources / Node (Pods)" dashboard to find the offending
+              pod.
