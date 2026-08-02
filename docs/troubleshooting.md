@@ -780,3 +780,32 @@ share. The `nls_utf8` gap was specific to `k3s-burst-worker`'s Ubuntu
 on the other nodes (`pi4-master`, `pi4-worker2`, `g3-worker3`) before
 scheduling any future SMB-mounting workload there, rather than
 rediscovering this the same way.
+
+## 2026-08-02 -- g3-worker3 power draw +70% (unrelated to same-day Terraform work)
+
+**Symptom:** Home Assistant power monitor showed `g3-worker3` climbing from
+~9W baseline to a sustained ~17-20W starting 2026-07-26, initially suspected
+to be caused by that day's Terraform/MinIO/Uptime Kuma work (wrong guess --
+those pods were consuming <1% CPU each when checked).
+
+**Root cause:** the Firefox/Selkies remote-desktop sidecar attached to the
+qBittorrent deployment had accumulated multiple browser tabs left open
+since 2026-07-21 and 2026-07-25 (visible via `ps aux` inside the container:
+several `-contentproc ... tab` processes dating back days, main firefox
+process showing 1139+ minutes of accumulated CPU time). Selkies' own video
+pipeline was correctly idle (`No display clients connected`, confirmed in
+container logs) -- the load was coming from the browser tabs themselves,
+not from encoding/streaming.
+
+**Fix:** `kubectl rollout restart deployment/qbittorrent -n qbittorrent`
+-- CPU idle on the node went from ~34-42% back to ~89% within a couple of
+minutes of the new pod stabilizing.
+
+**Lesson for next time:** this sidecar has no automatic tab-cleanup or
+periodic restart. If used for tracker logins, close tabs after use, or
+add a scheduled CronJob to restart the qbittorrent deployment weekly to
+bound how long stray tabs can accumulate. Also a good reminder: when
+diagnosing a resource spike, check actual per-pod/per-process usage
+(`kubectl top`, `ps aux` inside the container) before assuming it's
+whatever was deployed most recently -- the timing coincidence with that
+day's Terraform work was misleading.
