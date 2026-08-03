@@ -40,6 +40,7 @@ spec:
           for: 30m
           labels:
             severity: warning
+            instance: "{{ $labels.node }}"
           annotations:
             summary: "{{ $labels.node }}: last-24h CPU average is 30%+ above the prior 6-day baseline"
             description: >
