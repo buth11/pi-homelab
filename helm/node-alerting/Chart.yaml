@@ -1,0 +1,5 @@
+apiVersion: v2
+name: node-alerting
+description: Node CPU anomaly detection + Ntfy notification routing for the homelab cluster
+version: 0.1.0
+appVersion: "1.0"

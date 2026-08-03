@@ -1,0 +1,8 @@
+alertThresholdMultiplier: 1.3
+alertForDuration: 30m
+baselineMinPercent: 1
+
+ntfy:
+  # Set via --set ntfy.url=... at install/upgrade time, never committed here
+  url: "REPLACE_ME"
+  template: "alertmanager"
