@@ -1,0 +1,16 @@
+opensearchHosts: "http://opensearch-cluster-master:9200"
+image:
+  tag: "2.19.1"
+resources:
+  requests:
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+service:
+  type: LoadBalancer
+nodeSelector:
+  kubernetes.io/hostname: g3-worker3
+config:
+  opensearch_dashboards.yml: |
+    opensearch_security.multitenancy.enabled: false
+    opensearch_security.enabled: false

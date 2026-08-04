@@ -1,0 +1,23 @@
+image:
+  tag: "2.19.1"
+singleNode: true
+replicas: 1
+resources:
+  requests:
+    memory: 1Gi
+    cpu: 250m
+  limits:
+    memory: 1.5Gi
+opensearchJavaOpts: "-Xms512m -Xmx512m"
+persistence:
+  enabled: true
+  storageClass: local-path
+  size: 8Gi
+plugins:
+  securityConfig:
+    enabled: false
+config:
+  opensearch.yml: |
+    plugins.security.disabled: true
+nodeSelector:
+  kubernetes.io/hostname: g3-worker3
