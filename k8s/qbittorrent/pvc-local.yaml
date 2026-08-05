@@ -1,6 +1,6 @@
 # Local-path PVCs for state pinned to g3-worker3 (config, Firefox profile).
 # Downloads live on TrueNAS (tank-bulk/downloads) instead -- see
-# storageclass-downloads.yaml -- so they're reachable from FileBrowser too
+# k8s/filebrowser/storageclass-downloads.yaml -- so they are reachable from FileBrowser too
 # and aren't tied to this one node's local disk.
 apiVersion: v1
 kind: PersistentVolumeClaim
