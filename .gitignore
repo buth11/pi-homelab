@@ -1,2 +1,6 @@
 .kube/
 .env
+k8s/vaultwarden/*-key.pem
+k8s/vaultwarden/*.pem
+docs/security/trivy-reports/*.json
+docs/security/trivy-reports/*.json

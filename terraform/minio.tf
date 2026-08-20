@@ -28,7 +28,7 @@ resource "kubernetes_secret" "minio_credentials" {
   }
   data = {
     root-user     = "admin"
-    root-password = "ChangeMe123!"
+    root-password = var.minio_root_password
   }
 }
 
@@ -102,6 +102,10 @@ resource "kubernetes_deployment" "minio" {
         }
       }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [spec[0].template[0].metadata[0].annotations]
   }
 }
 
