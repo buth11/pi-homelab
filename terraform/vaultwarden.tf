@@ -104,7 +104,7 @@ resource "kubernetes_service" "vaultwarden" {
     namespace = kubernetes_namespace.vaultwarden.metadata[0].name
   }
   spec {
-    type = "LoadBalancer"
+    type = "ClusterIP"
     selector = {
       app = "vaultwarden"
     }
@@ -112,8 +112,5 @@ resource "kubernetes_service" "vaultwarden" {
       port        = 80
       target_port = 80
     }
-  }
-  lifecycle {
-    ignore_changes = [metadata[0].annotations]
   }
 }
