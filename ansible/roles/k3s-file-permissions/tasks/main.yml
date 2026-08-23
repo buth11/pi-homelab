@@ -1,0 +1,18 @@
+---
+- name: Check which K3s config files actually exist on this node
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /var/lib/rancher/k3s/agent/kubeproxy.kubeconfig
+    - /var/lib/rancher/k3s/agent/kubelet.kubeconfig
+    - /var/lib/rancher/k3s/agent/client-ca.crt
+  register: k3s_files_check
+
+- name: Set restrictive permissions (600) on existing K3s config files
+  ansible.builtin.file:
+    path: "{{ item.item }}"
+    mode: "0600"
+    owner: root
+    group: root
+  loop: "{{ k3s_files_check.results }}"
+  when: item.stat.exists

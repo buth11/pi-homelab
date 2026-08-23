@@ -4,3 +4,9 @@
   become: true
   roles:
     - kernel-modules
+
+- name: Apply CIS Benchmark file permission fixes (kube-bench findings)
+  hosts: k3s_cluster
+  become: true
+  roles:
+    - k3s-file-permissions

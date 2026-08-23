@@ -5,3 +5,4 @@ k8s/vaultwarden/*.pem
 docs/security/trivy-reports/*.json
 docs/security/trivy-reports/*.json
 docs/security/pentest-2026-08/
+.env-backups/
