@@ -110,3 +110,21 @@ snapshot policy, network segmentation, and the Home Assistant/Zigbee subsystem.
   Syncthing-managed folders
 - Widened the MetalLB pool (`192.168.50.50-60` → `192.168.50.50-80`),
   exhausted by the new arr-stack services
+
+### 2026-08-24
+
+- Replaced Vaultwarden's self-signed `mkcert` certificate with a real
+  Let's Encrypt certificate for `vault.analitykbiznesowy.pl`, issued
+  through Hostido's DirectAdmin AutoSSL panel, with DNS resolved via
+  split-DNS only (Pi-hole local A records + Tailscale split-DNS
+  nameserver entries) — nothing is exposed to the public internet — see
+  [setup/07-vaultwarden-tls-hostido.md](setup/07-vaultwarden-tls-hostido.md)
+- Diagnosed and fixed two blockers along the way: Hostido blocking
+  `.well-known/acme-challenge/` (fixed by their support), and native
+  apps (Bitwarden Android) rejecting the cert until the chain was built
+  through the `ISRG Root YR` cross-sign rather than the bare `YR2`
+  intermediate — full root-cause writeups in
+  [docs/troubleshooting.md](docs/troubleshooting.md)
+- Verified end-to-end with the native Bitwarden Android app over
+  Tailscale on cellular data (Wi-Fi off), confirming the split-DNS path
+  works from outside the LAN

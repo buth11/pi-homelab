@@ -629,3 +629,61 @@ manual SSH digging -- the data was already there, just not the habit of
 checking it first. A follow-up worth doing: configure a Prometheus alert
 rule (per-pod CPU sustained above a threshold) so this surfaces as a
 notification instead of being noticed a week later on the power monitor.
+
+## 2026-08-23 -- Vaultwarden real TLS cert via Hostido AutoSSL, two blockers
+
+Replacing the self-signed `mkcert` cert on the Vaultwarden Ingress with a
+real Let's Encrypt certificate for `vault.analitykbiznesowy.pl` (issued
+through Hostido's DirectAdmin panel, not a live ACME client on the
+cluster -- see [setup/07-vaultwarden-tls-hostido.md](../setup/07-vaultwarden-tls-hostido.md)
+for the full architecture) hit two separate blockers before it worked.
+
+### Hostido blocking `.well-known/acme-challenge/`
+
+Manual HTTP-01 validation kept returning `404` for any file placed under
+`.well-known/acme-challenge/` in `public_html`, regardless of filename or
+extension, while the rest of the site served files normally -- a
+server-side rule on Hostido's shared hosting blocking dotfile-prefixed
+directories. No client-side setting fixed it; **Hostido support fixed it**
+after a ticket. Ended up abandoning manual HTTP-01 anyway in favor of
+Hostido's built-in AutoSSL panel (Certyfikaty SSL -> "Uzyskaj automatyczny
+certyfikat od dostawcy ACME"), which sidesteps `.well-known` entirely.
+
+### Cert installs fine, but native apps reject it: `unable to get local issuer certificate`
+
+After installing the AutoSSL cert as the `vaultwarden-tls` Secret, TLS
+handshakes failed with `unable to get local issuer certificate` from an
+outdated curl image and, critically, the **native Android Bitwarden app**
+-- while modern desktop browsers accepted the same cert fine.
+
+**Root cause:** Let's Encrypt issued the cert from the new `YR2`
+intermediate, chaining to a brand-new root, `ISRG Root YR` (generated
+Sept 2025). Per Let's Encrypt's own docs, that root (and its sibling
+`ISRG Root YE`) is not yet included in most Root Program trust stores --
+browsers with their own frequently-updated root store (Chrome/Android's
+Google Root Store) had already added it, but clients relying on the
+OS-level system trust store (the Bitwarden app) hadn't.
+
+**Fix:** Let's Encrypt also publishes a cross-signed version of Root YR,
+signed by the old, universally-trusted `ISRG Root X1`
+(`https://letsencrypt.org/certs/gen-y/root-yr-by-x1.pem`). Serving
+`fullchain.pem` as leaf -> intermediate `YR2` -> Root YR (cross-signed by
+X1) -- 3 certificates total -- gives every client a valid path to a root
+it already trusts, without needing to know about `ISRG Root YR` at all.
+
+```bash
+openssl s_client -connect <traefik-lb-ip>:443 -servername vault.analitykbiznesowy.pl \
+  -showcerts </dev/null 2>/dev/null | grep -c "BEGIN CERTIFICATE"
+# -> 3
+```
+
+**Verification:** the native Bitwarden Android app connecting and syncing
+with no cert error was the actual acceptance test here -- it's the
+strictest client in the chain (OS trust store only, no bundled root
+updates), stricter than any browser check.
+
+**Lesson for next time:** "modern client accepts it" isn't sufficient
+verification for a new Let's Encrypt root rollout -- test against a
+client that uses the OS-level trust store with no independent root
+bundle, since that's exactly the gap a cross-signed intermediate closes
+and a browser-only check would miss entirely.

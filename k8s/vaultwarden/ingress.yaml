@@ -9,10 +9,43 @@ spec:
   tls:
   - hosts:
     - vault.home.local
+    - vault.analitykbiznesowy.pl
     secretName: vaultwarden-tls
   rules:
   - host: vault.home.local
     http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vaultwarden
+            port:
+              number: 80
+  - host: vault.analitykbiznesowy.pl
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vaultwarden
+            port:
+              number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vaultwarden-ip
+  namespace: vaultwarden
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.priority: "1"
+spec:
+  tls:
+  - secretName: vaultwarden-tls
+  rules:
+  - http:
       paths:
       - path: /
         pathType: Prefix
