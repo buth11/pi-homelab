@@ -156,3 +156,23 @@ scaled and nobody remembers triggering it:
    any credentials that service can reach and treat it as a live
    incident, not a config bug — see [SECURITY.md](SECURITY.md) for the
    access-control standard this is checked against.
+
+## Rotating the dashboard's Basic Auth password
+
+The dashboard (`http://192.168.50.58`) is gated by HTTP Basic Auth —
+credential lives in the `dashboard-auth` Secret (`.htpasswd` key), never
+committed. To rotate:
+
+```bash
+PASS=$(openssl rand -base64 18 | tr -d '/+=' | head -c 24)
+echo "$PASS"   # save it (e.g. Vaultwarden) -- shown once
+HASH=$(openssl passwd -apr1 "$PASS")
+printf 'buth11:%s\n' "$HASH" > /tmp/htpasswd
+kubectl create secret generic dashboard-auth -n dashboard \
+  --from-file=.htpasswd=/tmp/htpasswd \
+  --dry-run=client -o yaml | kubectl apply -f -
+shred -u /tmp/htpasswd
+kubectl rollout restart deployment/dashboard-frontend -n dashboard
+```
+Full commands also live as comments in
+[k8s/dashboard/auth-secret.yaml](../k8s/dashboard/auth-secret.yaml).

@@ -10,6 +10,7 @@ echo "==> Applying manifests..."
 kubectl apply -f "$K8S_DIR/namespace.yaml"
 kubectl apply -f "$K8S_DIR/rbac.yaml"
 kubectl apply -f "$K8S_DIR/configmap.yaml"
+kubectl apply -f "$K8S_DIR/nginx-configmap.yaml"
 kubectl apply -f "$K8S_DIR/service.yaml"
 
 echo ""
@@ -29,6 +30,17 @@ if ! kubectl get secret dashboard-ssh-key -n "$NAMESPACE" &>/dev/null; then
   fi
 else
   echo "   SSH key secret already exists."
+fi
+
+echo ""
+echo "==> Checking dashboard Basic Auth secret..."
+if ! kubectl get secret dashboard-auth -n "$NAMESPACE" &>/dev/null; then
+  echo "   dashboard-auth secret not found -- the dashboard has no login gate without it."
+  echo "   Generate and apply one (see k8s/dashboard/auth-secret.yaml for the exact commands),"
+  echo "   then re-run this script."
+  exit 1
+else
+  echo "   dashboard-auth secret already exists."
 fi
 
 echo ""

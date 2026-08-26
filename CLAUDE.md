@@ -99,7 +99,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 - **Jellyfin**: namespace jellyfin, media server, Intel QSV hardware acceleration
 - **Vaultwarden**: namespace vaultwarden, self-hosted password manager, Traefik Ingress at vault.home.local + vault.analitykbiznesowy.pl (real Let's Encrypt cert via Hostido AutoSSL, split-DNS only via Pi-hole + Tailscale — see setup/07-vaultwarden-tls-hostido.md)
 - **arr-stack** (Prowlarr/Sonarr/Radarr): namespace arr, on g3-worker3, GitOps-managed via ArgoCD
-- **Homelab Dashboard**: namespace dashboard, cluster control/WoL UI — hardening tracked internally, see docs/SECURITY.md#authentication-on-internal-services
+- **Homelab Dashboard**: namespace dashboard, cluster control/WoL UI — gated behind HTTP Basic Auth at the nginx frontend (`dashboard-auth` Secret, see k8s/dashboard/auth-secret.yaml); further hardening still tracked internally, see docs/SECURITY.md#authentication-on-internal-services
 - **File Browser**: namespace filebrowser, NAS file browser
 - **MinIO**: namespace minio, S3-compatible storage (also serves as the Terraform state backend)
 - **Uptime Kuma**: namespace uptime-kuma, status monitoring
