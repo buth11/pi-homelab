@@ -128,3 +128,15 @@ snapshot policy, network segmentation, and the Home Assistant/Zigbee subsystem.
 - Verified end-to-end with the native Bitwarden Android app over
   Tailscale on cellular data (Wi-Fi off), confirming the split-DNS path
   works from outside the LAN
+
+### 2026-08-28
+
+- Deployed Linkding (self-hosted bookmark manager) in a new `linkding`
+  namespace, reachable at `links.home.local` / `links.analitykbiznesowy.pl`
+  via the existing Traefik LoadBalancer — same split-DNS architecture as
+  Vaultwarden, mkcert for now with a real cert to follow the same manual
+  process — see [setup/08-linkding-bookmarks.md](setup/08-linkding-bookmarks.md)
+- Diagnosed a liveness-probe crash loop on first deploy (ARM CPU + slow
+  first-boot migrations killed repeatedly before ever finishing) — fixed
+  with a proper `startupProbe`, see
+  [docs/troubleshooting.md](docs/troubleshooting.md)

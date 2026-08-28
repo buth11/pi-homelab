@@ -687,3 +687,34 @@ verification for a new Let's Encrypt root rollout -- test against a
 client that uses the OS-level trust store with no independent root
 bundle, since that's exactly the gap a cross-signed intermediate closes
 and a browser-only check would miss entirely.
+
+## 2026-08-28 -- Linkding first deploy: liveness probe crash-looped the pod
+
+Deployed `linkding` with a plain `livenessProbe` (`initialDelaySeconds:
+15`, `periodSeconds: 30`) copied from a pattern used elsewhere. First boot
+runs 50+ Django migrations plus initial superuser creation -- password
+hashing is deliberately slow by design, and this is a Raspberry Pi 4 ARM
+CPU, not a cloud VM. The app wasn't listening on `:9090` until well past
+15s.
+
+**Symptom:** `curl` through Traefik returned `502` indefinitely; `kubectl
+get pods` showed `RESTARTS` climbing every ~90s.
+
+**Root cause, found via `kubectl describe pod`:** `Exit Code: 137`,
+`Reason: Error`, event log showing `Liveness probe failed ... connection
+refused` followed by `Killing ... failed liveness probe, will be
+restarted` -- kubelet was killing the container before the slow first-boot
+sequence ever finished, so every restart repeated the same slow sequence
+from scratch and never got far enough to pass a check. Exit code 137 alone
+looks like OOM at a glance; the event log is what actually confirms it was
+the liveness probe, not memory.
+
+**Fix:** added a `startupProbe` (`failureThreshold: 30`, `periodSeconds:
+10` -- 5 minute budget) ahead of the `livenessProbe`. `startupProbe`
+suppresses liveness/readiness checks entirely until it passes once, which
+is the correct tool for a slow-starting app -- a bare `initialDelaySeconds`
+bump would also have worked but wastes that delay on every restart, not
+just the slow first one. Added a `readinessProbe` at the same time so the
+Service doesn't route traffic before Django is actually up.
+
+Full writeup: [setup/08-linkding-bookmarks.md](../setup/08-linkding-bookmarks.md).

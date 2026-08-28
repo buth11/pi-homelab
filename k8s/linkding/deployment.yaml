@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: linkding
+  namespace: linkding
+  labels:
+    app: linkding
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: linkding
+  template:
+    metadata:
+      labels:
+        app: linkding
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: pi4-worker2
+      containers:
+      - name: linkding
+        image: sissbruecker/linkding:latest
+        ports:
+        - containerPort: 9090
+          name: http
+        env:
+        - name: LD_SUPERUSER_NAME
+          valueFrom:
+            secretKeyRef:
+              name: linkding-auth
+              key: superuser-name
+        - name: LD_SUPERUSER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: linkding-auth
+              key: superuser-password
+        volumeMounts:
+        - name: data
+          mountPath: /etc/linkding/data
+        resources:
+          requests:
+            cpu: 20m
+            memory: 96Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          periodSeconds: 10
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          periodSeconds: 30
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: linkding-data

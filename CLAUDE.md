@@ -98,6 +98,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 - **Firefox**: namespace qbittorrent, noVNC browser
 - **Jellyfin**: namespace jellyfin, media server, Intel QSV hardware acceleration
 - **Vaultwarden**: namespace vaultwarden, self-hosted password manager, Traefik Ingress at vault.home.local + vault.analitykbiznesowy.pl (real Let's Encrypt cert via Hostido AutoSSL, split-DNS only via Pi-hole + Tailscale — see setup/07-vaultwarden-tls-hostido.md)
+- **Linkding**: namespace linkding, self-hosted bookmark manager synced across browsers via the official browser extension, Traefik Ingress at links.home.local + links.analitykbiznesowy.pl (same split-DNS pattern as Vaultwarden; currently mkcert, real cert pending — see setup/08-linkding-bookmarks.md)
 - **arr-stack** (Prowlarr/Sonarr/Radarr): namespace arr, on g3-worker3, GitOps-managed via ArgoCD
 - **Homelab Dashboard**: namespace dashboard, cluster control/WoL UI — gated behind HTTP Basic Auth at the nginx frontend (`dashboard-auth` Secret, see k8s/dashboard/auth-secret.yaml); further hardening still tracked internally, see docs/SECURITY.md#authentication-on-internal-services
 - **File Browser**: namespace filebrowser, NAS file browser
@@ -118,6 +119,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 ## TLS Certificates
 
 - vaultwarden-tls (namespace vaultwarden): real Let's Encrypt cert for vault.home.local + vault.analitykbiznesowy.pl, issued manually via Hostido DirectAdmin AutoSSL panel — expires **2026-11-22**, renewal is MANUAL (no ACME client on the cluster). Procedure: docs/RUNBOOKS.md#vaultwarden-tls-certificate-approaching-expiry
+- linkding-tls (namespace linkding): **mkcert only for now** (LAN-trusted devices, not publicly trusted) — real cert + split-DNS still pending, see setup/08-linkding-bookmarks.md
 
 ## CronJobs
 
