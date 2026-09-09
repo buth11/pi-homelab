@@ -10,3 +10,9 @@
   become: true
   roles:
     - k3s-file-permissions
+
+- name: Deploy automatic node-boot Ansible watcher on control-plane
+  hosts: pi4-master
+  become: true
+  roles:
+    - node-boot-watcher

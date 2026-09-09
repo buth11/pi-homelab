@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Ansible against a node when it reports NodeReady (catches kernel/module drift after reboot)
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=buth11
+ExecStart=/usr/local/bin/ansible-on-node-ready.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

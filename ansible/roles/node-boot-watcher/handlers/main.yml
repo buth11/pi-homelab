@@ -1,0 +1,5 @@
+---
+- name: Restart node-boot watcher
+  ansible.builtin.systemd:
+    name: ansible-node-watcher.service
+    state: restarted

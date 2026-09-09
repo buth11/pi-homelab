@@ -1,0 +1,41 @@
+---
+- name: Install ansible (bundles community.general) on the control node
+  ansible.builtin.apt:
+    name: ansible
+    state: present
+    update_cache: true
+
+- name: Install NodeReady watcher script
+  ansible.builtin.copy:
+    src: ansible-on-node-ready.sh
+    dest: /usr/local/bin/ansible-on-node-ready.sh
+    owner: buth11
+    group: buth11
+    mode: "0755"
+  notify: Restart node-boot watcher
+
+- name: Install systemd unit for the node-boot watcher
+  ansible.builtin.copy:
+    src: ansible-node-watcher.service
+    dest: /etc/systemd/system/ansible-node-watcher.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: watcher_unit
+
+- name: Reload systemd units
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: watcher_unit is changed
+
+- name: Enable and start the node-boot watcher service
+  ansible.builtin.systemd:
+    name: ansible-node-watcher.service
+    enabled: true
+    state: started
+
+- name: Restart node-boot watcher if unit file changed
+  ansible.builtin.systemd:
+    name: ansible-node-watcher.service
+    state: restarted
+  when: watcher_unit is changed
