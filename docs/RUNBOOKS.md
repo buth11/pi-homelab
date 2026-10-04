@@ -372,4 +372,20 @@ kubectl create job --from=cronjob/vaultwarden-backup vaultwarden-backup-manual -
 
 **Second copy (3-2-1):** the same encrypted object is written to the TrueNAS SMB share `vaultwarden-backups` (dataset `tank-bulk/vaultwarden-backups`, subfolder `vaultwarden/`, via PVC `vaultwarden-backups`). Its credentials are the TrueNAS user `vwbackup` in Secret `smb-vaultwarden-backups-secret` (kube-system). Lessons from setting it up: the share's **Hosts Allow** field takes IP addresses only (a username there blocks everyone), and user access is set in **Edit Share ACL**, not in the share's edit form.
 
-**Not done yet:** a second copy on TrueNAS (3-2-1). The same job should write to an SMB share on `tank-bulk` once the share exists.
+**Restore from the TrueNAS copy (tested 2026-10-04):** the same object is on the share `vaultwarden-backups`, folder `vaultwarden/`. Download it with `smbclient //192.168.50.21/vaultwarden-backups -U vwbackup -c 'cd vaultwarden; get <file> restore.age'` (password typed at the prompt), then decrypt and check it exactly as in step 2 and 3 above. Remove the decrypted files afterwards, because they contain `rsa_key.pem`.
+
+**Not done yet:** scheduled verification. Restores are only tested by hand, so a backup that silently stopped being decryptable would be found late. A quarterly restore drill is the next improvement.
+
+## Pi-hole DNS unreachable or wrong answers
+
+**Alerts:** `PiholeDnsBurnFast` (critical), `PiholeDnsBurnSlow` (warning), `PiholeDnsProbeMissing` (critical), `PiholeUpstreamDnsFailing` (warning). Source: DNS probes in `k8s/monitoring/pihole-dns-probes.yaml`, SLO in `k8s/monitoring/pihole-dns-slo.yaml`.
+
+The internal probe asks Pi-hole for `vault.home.local` and expects `192.168.50.50`. A failure means the local override is missing or wrong, which breaks every internal service. The upstream probe asks for `example.com`, so a failure means Pi-hole cannot forward to its upstream resolvers.
+
+1. Is the probe itself healthy? Check the target in Prometheus (`probe_success{job="pihole-dns-internal"}`). If it is missing, check the blackbox pod before blaming Pi-hole.
+2. Ask Pi-hole directly from a LAN machine: `dig @192.168.50.53 vault.home.local +short` must print `192.168.50.50`, and `dig @192.168.50.53 example.com +short` must print addresses.
+3. If the local name is wrong, check the custom DNS entries in the Pi-hole web UI (or the `pihole` pod's custom list). Restoring the correct entry is what `automation-practice/pihole_entry.sh` does, idempotently.
+4. If upstream fails and local names work, check the upstream resolvers Pi-hole is configured with, and whether the router (192.168.50.1) is blocking outbound DNS.
+5. Check the pod: `kubectl get pods -n pihole` and `kubectl describe pod -n pihole <pod>` for restarts. Clients fall back to the router's DNS when Pi-hole is down, so symptoms can be intermittent.
+
+After the fix, the burn-rate alerts clear once the 5-minute and 30-minute windows recover. Record the incident in `docs/troubleshooting.md`.

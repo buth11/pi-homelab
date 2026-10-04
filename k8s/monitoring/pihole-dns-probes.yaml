@@ -1,0 +1,38 @@
+# DNS probes against Pi-hole's LoadBalancer IP. The internal probe checks the
+# local override that the whole home depends on (vault.home.local -> Traefik).
+# The upstream probe checks that Pi-hole forwards public names correctly.
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: pihole-dns-internal
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  jobName: pihole-dns-internal
+  interval: 60s
+  module: dns_pihole_internal
+  prober:
+    url: blackbox-prometheus-blackbox-exporter.monitoring.svc:9115
+  targets:
+    staticConfig:
+      static:
+        - 192.168.50.53:53
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: pihole-dns-upstream
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  jobName: pihole-dns-upstream
+  interval: 60s
+  module: dns_pihole_upstream
+  prober:
+    url: blackbox-prometheus-blackbox-exporter.monitoring.svc:9115
+  targets:
+    staticConfig:
+      static:
+        - 192.168.50.53:53

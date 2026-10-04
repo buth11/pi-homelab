@@ -1,0 +1,63 @@
+# SLO for internal DNS resolution (Pi-hole local override): 99.9% over 30 days,
+# error budget 0.1%. Burn-rate thresholds: 14.4 x 0.001 = 0.0144 (fast, pages),
+# 6 x 0.001 = 0.006 (slow, ticket). Same multi-window pattern as Vaultwarden.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: pihole-dns-slo
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: pihole-dns-slo.recording
+      interval: 30s
+      rules:
+        - record: pihole:error_ratio:5m
+          expr: 1 - avg_over_time(probe_success{job="pihole-dns-internal"}[5m])
+        - record: pihole:error_ratio:30m
+          expr: 1 - avg_over_time(probe_success{job="pihole-dns-internal"}[30m])
+        - record: pihole:error_ratio:1h
+          expr: 1 - avg_over_time(probe_success{job="pihole-dns-internal"}[1h])
+        - record: pihole:error_ratio:6h
+          expr: 1 - avg_over_time(probe_success{job="pihole-dns-internal"}[6h])
+        - record: pihole:availability:30d
+          expr: avg_over_time(probe_success{job="pihole-dns-internal"}[30d])
+    - name: pihole-dns-slo.alerts
+      rules:
+        - alert: PiholeDnsBurnFast
+          expr: pihole:error_ratio:1h > 0.0144 and pihole:error_ratio:5m > 0.0144
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Internal DNS is burning its error budget fast (about 14x)
+            description: Home services resolve through Pi-hole. At this rate the 30-day 99.9% SLO is gone in about 2 days.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#pi-hole-dns-unreachable-or-wrong-answers
+        - alert: PiholeDnsBurnSlow
+          expr: pihole:error_ratio:6h > 0.006 and pihole:error_ratio:30m > 0.006
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Internal DNS is burning its error budget steadily (about 6x)
+            description: At this rate the 30-day 99.9% SLO is gone in about 5 days.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#pi-hole-dns-unreachable-or-wrong-answers
+        - alert: PiholeDnsProbeMissing
+          expr: absent(probe_success{job="pihole-dns-internal"})
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: No internal DNS probe data
+            description: Absence of data is treated as an outage, so the SLO cannot be measured.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#pi-hole-dns-unreachable-or-wrong-answers
+        - alert: PiholeUpstreamDnsFailing
+          expr: avg_over_time(probe_success{job="pihole-dns-upstream"}[10m]) < 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Pi-hole cannot resolve public names reliably
+            description: Upstream forwarding fails. Internal names may still work, which hides the problem until something external breaks.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#pi-hole-dns-unreachable-or-wrong-answers
