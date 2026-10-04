@@ -1,0 +1,118 @@
+# Vaultwarden backup: ConfigMap with the script (source: k8s/vaultwarden/backup/backup.py).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vaultwarden-backup-script
+  namespace: vaultwarden
+data:
+  backup.py: "\"\"\"Encrypted, consistent backup of Vaultwarden's data directory.\n\nSQLite is copied with the online backup API (safe while Vaultwarden runs),\nchecked with integrity_check, archived, encrypted\
+    \ to an age recipient, and\nuploaded to S3-compatible storage. Old objects beyond the retention window\nare pruned. Exits non-zero on any failure so the CronJob shows as failed.\n\"\"\"\nimport datetime\n\
+    import os\nimport pathlib\nimport sqlite3\nimport tarfile\nimport tempfile\nimport time\n\nimport boto3\nimport pyrage\nfrom pyrage import x25519\n\nDATA = pathlib.Path(os.environ.get(\"DATA_DIR\",\
+    \ \"/data\"))\nENDPOINT = os.environ.get(\"S3_ENDPOINT\", \"\")\nBUCKET = os.environ.get(\"S3_BUCKET\", \"backups\")\nPREFIX = os.environ.get(\"S3_PREFIX\", \"vaultwarden/\")\nRETENTION_DAYS = int(os.environ.get(\"\
+    RETENTION_DAYS\", \"14\"))\nRECIPIENT = x25519.Recipient.from_str(os.environ[\"AGE_RECIPIENT\"])\nBACKUP_DIR = os.environ.get(\"BACKUP_DIR\", \"\")\n\n\ndef snapshot_db(workdir: pathlib.Path) -> pathlib.Path:\n\
+    \    dst_path = workdir / \"db.sqlite3\"\n    src = sqlite3.connect(DATA / \"db.sqlite3\")\n    dst = sqlite3.connect(dst_path)\n    try:\n        src.backup(dst)\n    finally:\n        dst.close()\n\
+    \        src.close()\n    check = sqlite3.connect(dst_path)\n    try:\n        result = check.execute(\"PRAGMA integrity_check\").fetchone()[0]\n    finally:\n        check.close()\n    if result !=\
+    \ \"ok\":\n        raise SystemExit(f\"integrity_check failed: {result}\")\n    return dst_path\n\n\ndef build_archive(workdir: pathlib.Path, stamp: str) -> pathlib.Path:\n    archive = workdir / f\"\
+    vaultwarden-{stamp}.tar.gz\"\n    with tarfile.open(archive, \"w:gz\") as tar:\n        tar.add(snapshot_db(workdir), arcname=\"db.sqlite3\")\n        for name in (\"rsa_key.pem\", \"config.json\"):\n\
+    \            path = DATA / name\n            if path.exists():\n                tar.add(path, arcname=name)\n        attachments = DATA / \"attachments\"\n        if attachments.exists():\n        \
+    \    tar.add(attachments, arcname=\"attachments\")\n    return archive\n\n\ndef encrypt(path: pathlib.Path) -> bytes:\n    return pyrage.encrypt(path.read_bytes(), [RECIPIENT])\n\n\ndef s3_client():\n\
+    \    return boto3.client(\n        \"s3\",\n        endpoint_url=ENDPOINT,\n        aws_access_key_id=os.environ[\"ACCESS_KEY\"],\n        aws_secret_access_key=os.environ[\"SECRET_KEY\"],\n       \
+    \ region_name=\"us-east-1\",\n    )\n\n\ndef prune(s3) -> int:\n    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=RETENTION_DAYS)\n    removed = 0\n    for obj in s3.list_objects_v2(Bucket=BUCKET,\
+    \ Prefix=PREFIX).get(\"Contents\", []):\n        if obj[\"LastModified\"] < cutoff:\n            s3.delete_object(Bucket=BUCKET, Key=obj[\"Key\"])\n            removed += 1\n    return removed\n\n\n\
+    def write_local(blob: bytes, name: str) -> None:\n    if not BACKUP_DIR:\n        return\n    target = pathlib.Path(BACKUP_DIR) / name\n    target.write_bytes(blob)\n    if target.stat().st_size !=\
+    \ len(blob):\n        raise SystemExit(\"size mismatch on local copy\")\n\n\ndef prune_local() -> int:\n    if not BACKUP_DIR:\n        return 0\n    cutoff = time.time() - RETENTION_DAYS * 86400\n\
+    \    removed = 0\n    for path in pathlib.Path(BACKUP_DIR).glob(\"vaultwarden-*.tar.gz.age\"):\n        if path.stat().st_mtime < cutoff:\n            path.unlink()\n            removed += 1\n    return\
+    \ removed\n\n\ndef main() -> None:\n    stamp = datetime.datetime.now(datetime.timezone.utc).strftime(\"%Y%m%dT%H%M%SZ\")\n    with tempfile.TemporaryDirectory() as tmp:\n        workdir = pathlib.Path(tmp)\n\
+    \        blob = encrypt(build_archive(workdir, stamp))\n    key = f\"{PREFIX}vaultwarden-{stamp}.tar.gz.age\"\n    s3 = s3_client()\n    s3.put_object(Bucket=BUCKET, Key=key, Body=blob)\n    if s3.head_object(Bucket=BUCKET,\
+    \ Key=key)[\"ContentLength\"] != len(blob):\n        raise SystemExit(\"size mismatch after upload\")\n    removed = prune(s3)\n    write_local(blob, key.rsplit(\"/\", 1)[-1])\n    local_removed = prune_local()\n\
+    \    print(f\"ok key={key} bytes={len(blob)} pruned={removed} local_pruned={local_removed}\")\n\n\nif __name__ == \"__main__\":\n    main()\n"
+---
+# Nightly encrypted backup of the Vaultwarden data directory. Runs on the same
+# node as the Vaultwarden pod because its data lives on a local-path volume
+# (ReadWriteOnce, node-bound). Writes two copies: MinIO (S3) and the TrueNAS SMB
+# share via PVC vaultwarden-backups. Encryption uses an age public key only: the
+# private key never enters the cluster. Credentials come from Secrets created by
+# hand (see docs/RUNBOOKS.md), never from git.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vaultwarden-backup
+  namespace: vaultwarden
+spec:
+  schedule: 30 3 * * *
+  timeZone: Europe/Warsaw
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/hostname: g3-worker3
+          containers:
+          - name: backup
+            image: python:3.12-slim
+            command:
+            - sh
+            - -c
+            - pip install -q --no-cache-dir boto3 pyrage && python /app/backup.py
+            env:
+            - name: DATA_DIR
+              value: /data
+            - name: TMPDIR
+              value: /work
+            - name: S3_ENDPOINT
+              value: http://minio.minio.svc.cluster.local:9000
+            - name: S3_BUCKET
+              value: backups
+            - name: S3_PREFIX
+              value: vaultwarden/
+            - name: RETENTION_DAYS
+              value: '14'
+            - name: AGE_RECIPIENT
+              value: age1qpz74sxstqqhsn5qx0spaanpsul0qayyxpn9lp42f59tnhd065aq9456l5
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vaultwarden-backup-s3
+                  key: ACCESS_KEY
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vaultwarden-backup-s3
+                  key: SECRET_KEY
+            - name: BACKUP_DIR
+              value: /backup
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                memory: 256Mi
+            volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: app
+              mountPath: /app
+            - name: work
+              mountPath: /work
+            - name: backups
+              mountPath: /backup
+          volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: vaultwarden-data
+          - name: app
+            configMap:
+              name: vaultwarden-backup-script
+          - name: work
+            emptyDir:
+              medium: Memory
+              sizeLimit: 256Mi
+          - name: backups
+            persistentVolumeClaim:
+              claimName: vaultwarden-backups

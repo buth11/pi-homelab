@@ -1,0 +1,40 @@
+# Alerts for the Vaultwarden backup CronJob. kube-state-metrics provides the
+# job and cronjob metrics; no custom exporter is needed.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vaultwarden-backup
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: vaultwarden-backup
+      rules:
+        - alert: VaultwardenBackupFailed
+          expr: max(kube_job_status_failed{namespace="vaultwarden",job_name=~"vaultwarden-backup-.*"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Vaultwarden backup job failed
+            description: A backup run failed after its retries. Without a fresh backup, a node failure now loses the password vault.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-backup
+        - alert: VaultwardenBackupStale
+          expr: time() - max(kube_cronjob_status_last_successful_time{namespace="vaultwarden",cronjob="vaultwarden-backup"}) > 26 * 3600
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: No successful Vaultwarden backup in over 26 hours
+            description: The nightly job did not complete. Check the last job logs before anything else.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-backup
+        - alert: VaultwardenBackupNeverRan
+          expr: absent(kube_cronjob_status_last_successful_time{namespace="vaultwarden",cronjob="vaultwarden-backup"})
+          for: 26h
+          labels:
+            severity: warning
+          annotations:
+            summary: Vaultwarden backup has never succeeded
+            description: The CronJob has no successful run recorded.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-backup

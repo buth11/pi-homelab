@@ -338,3 +338,38 @@ After the fix, the slow and fast burn alerts clear on their own once the 5-minut
 2. Snapshots keep deleted data. Check snapshot space before deleting files: `zfs list -t snapshot -o name,used -s used | tail`.
 3. Downloads and media are the usual growth. Check qBittorrent's completed-download folder and the arr media folders before deleting anything still seeded or indexed.
 4. Only after a clear cause: delete or move data, then confirm the forecast in Grafana (HDD activity dashboard, free space panel) moves back above the threshold.
+
+## Vaultwarden backup
+
+**What:** nightly CronJob `vaultwarden-backup` (03:30 Europe/Warsaw, runs on `g3-worker3` where the data volume lives). It takes a consistent SQLite copy with the online backup API, checks it with `integrity_check`, archives it with `rsa_key.pem` and attachments, encrypts it with **age** and uploads it to the MinIO bucket `backups` under `vaultwarden/`. Objects older than 14 days are pruned. Source: `k8s/vaultwarden/backup/`.
+
+**Encryption:** only the public key is in the cluster. The private key is `~/.config/homelab-backup/age.key` on the admin workstation, with an offline copy kept outside the devcontainer. Without it, the backups cannot be read at all.
+
+**Alerts:** `VaultwardenBackupFailed` (critical), `VaultwardenBackupStale` (no success in 26 h, critical), `VaultwardenBackupNeverRan` (warning).
+
+**Check the last run:**
+```
+kubectl get cronjob,job -n vaultwarden
+kubectl logs -n vaultwarden job/<last-job-name>
+```
+A healthy run ends with `ok key=vaultwarden/... bytes=...`.
+
+**Run it now:**
+```
+kubectl create job --from=cronjob/vaultwarden-backup vaultwarden-backup-manual -n vaultwarden
+```
+
+**Restore (tested 2026-10-04 on a copy of the nightly backup, `db.sqlite3` passed `PRAGMA integrity_check`):**
+1. Download the object from the `backups` bucket (`vaultwarden/vaultwarden-<stamp>.tar.gz.age`), for example with boto3 through a port-forward to `svc/minio` 9000.
+2. Decrypt and unpack on the admin workstation:
+   ```
+   age -d -i ~/.config/homelab-backup/age.key -o restore.tar.gz vaultwarden-<stamp>.tar.gz.age && tar -xzf restore.tar.gz
+   ```
+3. Check the database: `python3 -c "import sqlite3; print(sqlite3.connect('db.sqlite3').execute('PRAGMA integrity_check').fetchone())"` must print `('ok',)`.
+4. To restore into the cluster: scale `vaultwarden` to 0, copy `db.sqlite3`, `rsa_key.pem` and `attachments/` into the data volume, scale back to 1. Delete the stale `db.sqlite3-wal` and `-shm` files first.
+
+**Credentials:** the secret `vaultwarden-backup-s3` holds the access key of the dedicated MinIO user `vaultwarden-backup`, limited by policy `backups-rw` to the `backups` bucket. Root credentials are not used by the backup. Rotate by creating a new service account for that user with `mc admin user svcacct add` and replacing the secret.
+
+**Second copy (3-2-1):** the same encrypted object is written to the TrueNAS SMB share `vaultwarden-backups` (dataset `tank-bulk/vaultwarden-backups`, subfolder `vaultwarden/`, via PVC `vaultwarden-backups`). Its credentials are the TrueNAS user `vwbackup` in Secret `smb-vaultwarden-backups-secret` (kube-system). Lessons from setting it up: the share's **Hosts Allow** field takes IP addresses only (a username there blocks everyone), and user access is set in **Edit Share ACL**, not in the share's edit form.
+
+**Not done yet:** a second copy on TrueNAS (3-2-1). The same job should write to an SMB share on `tank-bulk` once the share exists.

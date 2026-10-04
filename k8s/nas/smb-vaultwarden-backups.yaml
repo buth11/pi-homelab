@@ -1,0 +1,23 @@
+# Dedicated SMB share on TrueNAS for Vaultwarden backups (second copy, 3-2-1).
+# Uses its own credentials (Secret smb-vaultwarden-backups-secret in kube-system)
+# so that this share is not reachable with the credentials of the media shares.
+# Modes are tighter than the media shares: backups are readable by root only.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: smb-vaultwarden-backups
+mountOptions:
+  - dir_mode=0750
+  - file_mode=0640
+  - vers=3.0
+  - iocharset=utf8
+parameters:
+  csi.storage.k8s.io/node-stage-secret-name: smb-vaultwarden-backups-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: kube-system
+  csi.storage.k8s.io/provisioner-secret-name: smb-vaultwarden-backups-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: kube-system
+  source: //192.168.50.21/vaultwarden-backups
+  subDir: vaultwarden
+provisioner: smb.csi.k8s.io
+reclaimPolicy: Retain
+volumeBindingMode: Immediate

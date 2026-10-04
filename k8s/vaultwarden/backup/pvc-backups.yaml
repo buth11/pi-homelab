@@ -1,0 +1,12 @@
+# Second backup copy on TrueNAS, mounted by the backup CronJob (see smb-vaultwarden-backups.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vaultwarden-backups
+  namespace: vaultwarden
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: smb-vaultwarden-backups
+  resources:
+    requests:
+      storage: 10Gi
