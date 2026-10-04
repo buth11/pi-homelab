@@ -40,10 +40,10 @@ spec:
         resources:
           requests:
             cpu: 20m
-            memory: 96Mi
+            memory: 256Mi
           limits:
             cpu: 2000m
-            memory: 256Mi
+            memory: 512Mi
         startupProbe:
           httpGet:
             path: /health

@@ -18,6 +18,11 @@ spec:
       containers:
       - name: qbittorrent
         image: lscr.io/linuxserver/qbittorrent:latest
+        resources:
+          requests:
+            memory: 64Mi
+          limits:
+            memory: 256Mi
         env:
         - name: PUID
           value: "1000"
@@ -38,6 +43,11 @@ spec:
 
       - name: firefox
         image: lscr.io/linuxserver/firefox:latest
+        resources:
+          requests:
+            memory: 2560Mi
+          limits:
+            memory: 3Gi
         env:
         - name: PUID
           value: "1000"

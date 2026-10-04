@@ -10,14 +10,27 @@
 
 | Node | Role | K3s version | OS |
 |------|------|-------------|-----|
-| pi4-master | control-plane | v1.35.5+k3s1 | Debian 12 (bookworm) |
-| pi4-worker2 | worker | v1.35.5+k3s1 | Debian 12 (bookworm) |
-| g3-worker3 | worker, media/QSV | v1.35.5+k3s1 | Ubuntu 24.04.4 LTS |
-| k3s-burst-worker | worker (Proxmox VM) | v1.36.2+k3s1 | Ubuntu 24.04.4 LTS |
+| pi4-master | control-plane | v1.36.4+k3s1 | Debian 12 (bookworm) |
+| pi4-worker2 | worker | v1.36.4+k3s1 | Debian 12 (bookworm) |
+| g3-worker3 | worker, media/QSV | v1.36.4+k3s1 | Ubuntu 24.04.4 LTS |
+| k3s-burst-worker | worker (Proxmox VM) | v1.36.4+k3s1 | Ubuntu 24.04.4 LTS |
 
-`k3s-burst-worker` runs one minor version ahead of the rest — known, not
-yet reconciled; check this table against `kubectl get nodes` before
-assuming version parity when debugging something version-sensitive.
+All four nodes were brought to v1.36.4 on 2026-09-19. Before that,
+`k3s-burst-worker` (v1.36.2) ran ahead of the control plane (v1.35.5), a
+kubelet-newer-than-apiserver skew Kubernetes does not support; it surfaced
+as the `KubeVersionMismatch` alert once alert routing was fixed. Keep the
+rule: **control plane first, workers after, never a kubelet newer than the
+apiserver** (procedure: [RUNBOOKS.md](RUNBOOKS.md#upgrading-k3s-minorpatch)).
+
+Per-node K3s settings that must survive an installer re-run live in
+`/etc/rancher/k3s/config.yaml`, not in the generated systemd unit:
+
+| Node | `config.yaml` |
+|------|---------------|
+| pi4-master | `disable: [servicelb]`, `flannel-iface: eth0` |
+| pi4-worker2 | `flannel-iface: eth0` |
+| g3-worker3 | `flannel-iface: enp3s0` |
+| k3s-burst-worker | none |
 
 ## Namespace map
 

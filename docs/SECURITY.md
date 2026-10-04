@@ -64,10 +64,10 @@ what's used** — not "get/list/watch" copied onto resources the workload
 never actually reads, and never `delete`/`patch` on `nodes` for anything
 that isn't node lifecycle tooling.
 
-Two ServiceAccounts currently violate this (see the audit for detail and
-fix plan):
-- `shutdown-sa` (`k8s/cronjobs/rbac.yaml`) — ClusterRole grants node
-  delete/patch for a job that only scales two Deployments to zero.
+One ServiceAccount currently violates this (see the audit for detail and
+fix plan). A second one, `shutdown-sa`, whose ClusterRole granted node
+delete/patch to a job that only scaled two Deployments, was removed on
+2026-09-19 together with the CronJobs it served.
 - `dashboard-backend` (`k8s/dashboard/rbac.yaml`) — ClusterRole is
   arguably right-sized for the dashboard's *features*, but nothing gates
   who can invoke those features (see below).

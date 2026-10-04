@@ -1,0 +1,714 @@
+# Grafana dashboard "Top consumers" (uid: top-consumers), provisioned as a
+# ConfigMap. The Grafana sidecar watches every namespace for the label
+# grafana_dashboard=1 and hot-reloads it, so no Grafana restart is needed.
+#
+#   kubectl apply -f k8s/monitoring/top-consumers-dashboard.yaml
+#
+# Panels: top pods by memory/CPU (now and over time), usage vs memory
+# request, pods with no request, per-node CPU/memory/root disk. There is
+# deliberately no per-pod disk panel: for local-path volumes the kubelet
+# reports whole-node usage (see the text panel at the bottom of the board).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-top-consumers
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  top-consumers.json: |
+    {
+      "uid": "top-consumers",
+      "title": "Top consumers",
+      "description": "Which pods and nodes use the most CPU, memory and disk, plus right-sizing hints.",
+      "tags": [
+        "homelab",
+        "capacity"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "refresh": "1m",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "label": "Namespace",
+            "type": "query",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "prometheus"
+            },
+            "query": {
+              "query": "label_values(kube_pod_info, namespace)",
+              "refId": "ns"
+            },
+            "definition": "label_values(kube_pod_info, namespace)",
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "refresh": 2,
+            "sort": 1,
+            "current": {
+              "selected": true,
+              "text": [
+                "All"
+              ],
+              "value": [
+                "$__all"
+              ]
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "list": []
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 1,
+          "title": "Right now: who uses the most",
+          "collapsed": false,
+          "gridPos": {
+            "x": 0,
+            "y": 0,
+            "w": 24,
+            "h": 1
+          },
+          "panels": []
+        },
+        {
+          "type": "bargauge",
+          "id": 2,
+          "title": "Memory: top 10 pods",
+          "description": "Working-set memory (what the kernel cannot easily reclaim), the number the OOM killer cares about.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 1,
+            "w": 12,
+            "h": 9
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sort_desc(topk(10, sum by (namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",namespace=~\"$namespace\"})))",
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "refId": "A",
+              "instant": true,
+              "range": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "min": 0,
+              "color": {
+                "mode": "continuous-BlPu"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "showUnfilled": true,
+            "namePlacement": "left",
+            "valueMode": "color",
+            "minVizHeight": 10,
+            "minVizWidth": 0,
+            "sizing": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "values": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "type": "bargauge",
+          "id": 3,
+          "title": "CPU: top 10 pods",
+          "description": "Average CPU over the selected rate interval, in millicores (1000 m = one full core).",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 1,
+            "w": 12,
+            "h": 9
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sort_desc(topk(10, sum by (namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",namespace=~\"$namespace\"}[$__rate_interval])) * 1000))",
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "refId": "A",
+              "instant": true,
+              "range": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "suffix: m",
+              "min": 0,
+              "color": {
+                "mode": "continuous-BlPu"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "showUnfilled": true,
+            "namePlacement": "left",
+            "valueMode": "color",
+            "minVizHeight": 10,
+            "minVizWidth": 0,
+            "sizing": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "values": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "type": "row",
+          "id": 4,
+          "title": "Over time",
+          "collapsed": false,
+          "gridPos": {
+            "x": 0,
+            "y": 10,
+            "w": 24,
+            "h": 1
+          },
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "id": 5,
+          "title": "Memory by pod (top 10)",
+          "description": "Same series as above over the dashboard time range.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 11,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "topk(10, sum by (namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",namespace=~\"$namespace\"}))",
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 6,
+          "title": "CPU by pod (top 10)",
+          "description": "Millicores. Spikes here that line up with a node CPU spike below point at the culprit.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 11,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "topk(10, sum by (namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",namespace=~\"$namespace\"}[$__rate_interval])) * 1000)",
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "suffix: m",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "id": 7,
+          "title": "Right-sizing",
+          "collapsed": false,
+          "gridPos": {
+            "x": 0,
+            "y": 19,
+            "w": 24,
+            "h": 1
+          },
+          "panels": []
+        },
+        {
+          "type": "bargauge",
+          "id": 8,
+          "title": "Memory usage vs request",
+          "description": "Working-set memory divided by the pod's memory request. Above 100% the pod uses more than it reserved; far below ~30% it reserves more than it needs. Only pods that HAVE a request appear.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 20,
+            "w": 12,
+            "h": 9
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sort_desc(sum by (namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",namespace=~\"$namespace\"}) / sum by (namespace,pod) (kube_pod_container_resource_requests{resource=\"memory\",namespace=~\"$namespace\"}))",
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "refId": "A",
+              "instant": true,
+              "range": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 0.3
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1.0
+                  },
+                  {
+                    "color": "red",
+                    "value": 1.5
+                  }
+                ]
+              },
+              "max": 3
+            },
+            "overrides": []
+          },
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "showUnfilled": true,
+            "namePlacement": "left",
+            "valueMode": "color",
+            "minVizHeight": 10,
+            "minVizWidth": 0,
+            "sizing": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "values": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "type": "bargauge",
+          "id": 9,
+          "title": "Top memory users with NO request",
+          "description": "Pods that use memory but declare no request, so the scheduler cannot account for them. Candidates for a request.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 20,
+            "w": 12,
+            "h": 9
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sort_desc(topk(10, sum by (namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",namespace=~\"$namespace\"}) unless on(namespace,pod) sum by (namespace,pod) (kube_pod_container_resource_requests{resource=\"memory\",namespace=~\"$namespace\"})))",
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "refId": "A",
+              "instant": true,
+              "range": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "min": 0,
+              "color": {
+                "mode": "continuous-BlPu"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "showUnfilled": true,
+            "namePlacement": "left",
+            "valueMode": "color",
+            "minVizHeight": 10,
+            "minVizWidth": 0,
+            "sizing": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "values": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "type": "row",
+          "id": 10,
+          "title": "Nodes",
+          "collapsed": false,
+          "gridPos": {
+            "x": 0,
+            "y": 29,
+            "w": 24,
+            "h": 1
+          },
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "id": 11,
+          "title": "Node CPU used",
+          "description": "Non-idle CPU as a share of all cores.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 30,
+            "w": 8,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "(sum by (instance) (rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval])) / count by (instance) (node_cpu_seconds_total{mode=\"idle\"})) * on(instance) group_left(node) label_replace(kube_node_info, \"instance\", \"$1:9100\", \"internal_ip\", \"(.*)\")",
+              "legendFormat": "{{node}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "max": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 12,
+          "title": "Node memory used",
+          "description": "1 - MemAvailable/MemTotal.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 8,
+            "y": 30,
+            "w": 8,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left(node) label_replace(kube_node_info, \"instance\", \"$1:9100\", \"internal_ip\", \"(.*)\")",
+              "legendFormat": "{{node}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "max": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "bargauge",
+          "id": 13,
+          "title": "Node root disk used",
+          "description": "Root ext4 filesystem per node. Thresholds match the alerting policy: 75% warn, 85% critical.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 16,
+            "y": 30,
+            "w": 8,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/\",fstype=\"ext4\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype=\"ext4\"}) * on(instance) group_left(node) label_replace(kube_node_info, \"instance\", \"$1:9100\", \"internal_ip\", \"(.*)\")",
+              "legendFormat": "{{node}}",
+              "refId": "A",
+              "instant": true,
+              "range": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.75
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "max": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "showUnfilled": true,
+            "namePlacement": "left",
+            "valueMode": "color",
+            "minVizHeight": 10,
+            "minVizWidth": 0,
+            "sizing": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "values": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "type": "text",
+          "id": 14,
+          "title": "Why there is no per-pod disk panel",
+          "gridPos": {
+            "x": 0,
+            "y": 38,
+            "w": 24,
+            "h": 4
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "**Disk per pod is not shown on purpose.** For `local-path` volumes the kubelet metric `kubelet_volume_stats_used_bytes` reports the usage of the whole node filesystem, not of the volume: on one node every PVC shows the same number (a 6 MB Vaultwarden volume looks like 60 GB). Per-pod ephemeral usage (`container_fs_usage_bytes`) is not exported by this K3s at all. The node disk panel above is accurate; real per-PVC sizes need a small `du`-based exporter (planned)."
+          }
+        }
+      ]
+    }

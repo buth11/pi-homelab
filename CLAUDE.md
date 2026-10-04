@@ -73,7 +73,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 - **pi4-master**: 192.168.50.10, Pi 4B 4GB, control-plane
 - **pi4-worker2**: 192.168.50.12, Pi 4B 4GB, worker
 - **g3-worker3**: 192.168.50.13, GMKtec G3 Mini (Intel N100, 16GB), media workloads, Ubuntu Server
-- **k3s-burst-worker**: 192.168.50.30, Proxmox VM worker (runs one K3s minor version ahead of the rest — see docs/KUBERNETES.md)
+- **k3s-burst-worker**: 192.168.50.30, Proxmox VM worker (all nodes on K3s v1.36.4 since 2026-09-19 — see docs/KUBERNETES.md)
 - **Proxmox VE**: 192.168.50.20 (mgmt) / 10.10.10.1 (storage net), GMKtec Topton FU02 AMD 7730U, 64GB RAM, 1TB SATA SSD + 2TB NVMe local
 - **TrueNAS SCALE**: 192.168.50.21 (mgmt) / 10.10.10.2 (storage net), GMKtec Topton AMD 5600U, 29GB RAM, 3 ZFS pools (~12.5 TiB usable)
 - **NAS (legacy)**: //ASUS/Crucial_2TB (SMB, 2TB, guest access) — media library migrated off this to TrueNAS, kept for qBittorrent working dir
@@ -123,8 +123,10 @@ this file is the fast-lookup summary, not the source of truth for detail.
 
 ## CronJobs
 
-- shutdown-pods: 22:55 - scale down qbittorrent i jellyfin
-- shutdown-g3: 23:00 - SSH shutdown g3-worker3
+None. The nightly `shutdown-pods` / `shutdown-g3` CronJobs were removed on
+2026-09-19 (suspended by hand since 2026-06-08 after a failed run); g3-worker3
+shutdown and wake are done from the Homelab Dashboard. See
+[docs/RUNBOOKS.md](docs/RUNBOOKS.md#g3-worker3-shutdown--wake-cycle).
 
 ## Storage (K3s StorageClasses)
 

@@ -77,3 +77,10 @@ prometheus:
           resources:
             requests:
               storage: 8Gi
+    additionalScrapeConfigs:
+      - job_name: truenas-storage
+        scrape_interval: 30s
+        static_configs:
+          - targets: ["192.168.50.21:9100"]
+            labels:
+              host: truenas

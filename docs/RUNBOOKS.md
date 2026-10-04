@@ -126,9 +126,12 @@ env-var value or edit the manifest directly.
 
 ## g3-worker3 shutdown / wake cycle
 
-Automated nightly: `shutdown-pods` CronJob (22:55, scales qBittorrent +
-Jellyfin to 0) then `shutdown-g3` CronJob (23:00, SSH shutdown). Manual
-equivalent:
+Shutdown and wake are driven from the Homelab Dashboard
+(`http://192.168.50.58`). There is no nightly automation: the
+`shutdown-pods` / `shutdown-g3` CronJobs were suspended by hand on
+2026-06-08 after `shutdown-g3` failed with `BackoffLimitExceeded`, and were
+removed on 2026-09-19 (their leftover failed Job was what raised
+`KubeJobFailed` once alert routing was fixed). Manual equivalent:
 ```bash
 kubectl scale deployment qbittorrent -n qbittorrent --replicas=0
 kubectl scale deployment jellyfin -n jellyfin --replicas=0
@@ -176,3 +179,139 @@ kubectl rollout restart deployment/dashboard-frontend -n dashboard
 ```
 Full commands also live as comments in
 [k8s/dashboard/auth-secret.yaml](../k8s/dashboard/auth-secret.yaml).
+
+## Rebooting the Proxmox host (new kernel installed)
+
+Proxmox (`192.168.50.20`) hosts two VMs: Home Assistant (VM 100) and
+`k3s-burst-worker` (VM 101). Both disks live on `tank-fast-nfs`
+(TrueNAS, over the dedicated `10.10.10.x` link), so rebooting the host
+takes down Home Assistant and one K3s node, but not TrueNAS itself.
+Expect a few minutes of downtime for both.
+
+**Before the reboot** (on `root@pve` unless noted):
+
+1. Confirm a newer kernel is actually waiting: `uname -r` (running) vs
+   `ls /boot | grep vmlinuz` (installed).
+2. Confirm nothing long-running is in flight: `pgrep -af
+   'rsync|vzdump'`. Empty output = safe. A reboot kills a running
+   transfer or backup.
+3. Confirm every VM that must come back has start-at-boot set: `qm list`,
+   then `qm config <vmid> | grep onboot` for each. No output means
+   `onboot` is off and the VM stays down after the reboot. Fix with
+   `qm set <vmid> --onboot 1`. (On 2026-09-19 neither VM 100 nor 101 had
+   it set.) VM 102 (`IT02`) is intentionally stopped; leave it.
+4. Drain the K3s node that lives on this host (from a machine with
+   `kubectl`):
+   ```bash
+   kubectl get pods -A -o wide --field-selector spec.nodeName=k3s-burst-worker
+   kubectl drain k3s-burst-worker --ignore-daemonsets --delete-emptydir-data
+   ```
+   Pods with `local-path` PVCs (Prometheus, Grafana, Syncthing at the
+   time of writing) are pinned to this node and will sit `Pending` for
+   the whole window, so Prometheus stops scraping (no alerts fire from
+   it) and Syncthing stops syncing. That is expected, not a failure.
+
+**Reboot:** `reboot` on `root@pve`. Proxmox shuts guests down gracefully
+(`pve-guests`) before restarting. **Do not `uncordon` yet.**
+
+**After the host is back:**
+
+1. On `root@pve`: `uname -r` (new version?), `systemctl --failed` (empty),
+   `pvesm status` (`tank-fast-nfs` must be `active`, otherwise the VMs
+   cannot start), `qm list` (100 and 101 `running`).
+2. Home Assistant: check Zigbee devices are back (the USB passthrough is
+   by vendor:product ID, so it should survive).
+3. Only now: `kubectl get nodes`, then
+   `kubectl uncordon k3s-burst-worker`, then
+   `kubectl get pods -A | grep -v -E "Running|Completed"` until empty.
+4. Right after boot a pod may show a transient `FailedMount` with
+   `driver name smb.csi.k8s.io not found`: the pod started before the CSI
+   SMB DaemonSet re-registered. Kubernetes retries and it clears on its
+   own.
+5. The `ansible-node-watcher` on `pi4-master` re-applies the kernel
+   modules role when the node's kubelet starts. Confirm with
+   `journalctl -u ansible-node-watcher -n 30` (this is the drift from
+   [postmortems/2026-09-09-k3s-burst-worker-cifs-mount-failure.md](postmortems/2026-09-09-k3s-burst-worker-cifs-mount-failure.md)).
+
+**Rollback:** old kernels stay installed. `proxmox-boot-tool kernel list`,
+then `proxmox-boot-tool kernel pin <old-version>` and reboot again.
+Proxmox is a mini-PC with no IPMI, so keep a monitor and keyboard within
+reach: if the network doesn't come up there is no remote way in.
+
+**Lesson from the 2026-09-19 reboot:** `uncordon` was run right after the
+drain, before the host had actually rebooted. That cancelled the drain,
+the pods moved back onto the node, and the reboot then killed them
+without a clean eviction. It recovered only because the data sits on the
+VM disk. Keep the node cordoned until the host is confirmed back.
+
+## Upgrading K3s (minor/patch)
+
+First done 2026-09-19: v1.35.5 → v1.36.4 on all four nodes. Order matters:
+**control plane first, then workers; a kubelet must never be newer than the
+apiserver.** Move one minor version at a time. Pick the target from
+`https://update.k3s.io/v1-release/channels` (the `stable` channel is the
+default choice).
+
+**Before starting**
+
+1. Nothing in the cluster should be unhealthy:
+   `kubectl get pods -A | grep -v -E "Running|Completed"`.
+2. Read what the installer will overwrite. It **rewrites the systemd unit
+   from the arguments you pass now**, so any flag currently in `ExecStart`
+   disappears unless it is in `config.yaml`:
+   ```bash
+   sudo systemctl cat k3s | sed -n '/^KillMode/p;/^ExecStart=/,$p'      # agents: k3s-agent
+   sudo sed 's/=.*/=<hidden>/' /etc/systemd/system/k3s.service.env   # names only, values hidden
+   sudo cat /etc/rancher/k3s/config.yaml
+   ```
+   Move every flag (here `--flannel-iface <nic>`) into `config.yaml` as
+   `flannel-iface: <nic>` first. A wrong flannel interface can break pod
+   networking cluster-wide (Tailscale is present on this network).
+   Also check `KillMode=process`: it is what lets pods survive a K3s restart.
+3. **Back up the master's datastore.** It is SQLite in WAL mode, so copying
+   `state.db` alone is inconsistent. Stop K3s, copy the whole directory,
+   start it again (pods keep running), and keep the old binary, since a
+   minor downgrade needs old DB + old binary:
+   ```bash
+   BK=/var/backups/k3s-$(date +%Y%m%d)-pre-upgrade
+   sudo mkdir -p "$BK" && sudo systemctl stop k3s
+   sudo cp -a /var/lib/rancher/k3s/server/db "$BK/db"
+   sudo cp -a /var/lib/rancher/k3s/server/token "$BK/token"
+   sudo cp -a /usr/local/bin/k3s "$BK/k3s-old"
+   sudo systemctl start k3s && sudo chmod -R go-rwx "$BK"
+   ```
+   The backup holds cluster secrets: keep it root-only, outside any
+   Syncthing folder, and delete it once the cluster has been stable for a
+   week.
+
+**Upgrade** (each node, master first). No drain: most workloads here have
+`local-path` volumes pinned to their node, so a drain would just leave them
+`Pending` (Pi-hole DNS included), while restarting the K3s service does not
+restart pods.
+
+```bash
+# master
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<version> sh -
+
+# every agent: re-supply K3S_URL/K3S_TOKEN by sourcing the existing env
+# file, otherwise the installer rewrites it without them and the agent
+# cannot rejoin (the token never appears on screen or in history)
+sudo bash -c 'set -a; . /etc/systemd/system/k3s-agent.service.env; set +a; curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<version> sh -'
+```
+
+**After each node:** `kubectl get nodes` shows the new version and `Ready`;
+`kubectl get node <n> -o jsonpath='{.metadata.annotations.flannel\.alpha\.coreos\.com/public-ip}'`
+equals the node's LAN IP (proves `flannel-iface` survived); no pod is stuck
+(`kubectl get pods -A | grep -v -E "Running|Completed"`).
+
+**After the master:** K3s re-applies its bundled add-ons. The Traefik
+`helm-install-traefik` Job can fail once with `Required CRDs are missing`,
+because it ran before the `traefik-crd` Job finished. Nothing is down (the
+old Traefik keeps serving) and it succeeds on a retry; confirm with
+`helm list -n kube-system`, `kubectl rollout status deploy/traefik -n
+kube-system`, and a curl against the ingress hosts.
+
+**Rollback:** stop K3s, restore `$BK/db` and `$BK/token` into
+`/var/lib/rancher/k3s/server/`, put `$BK/k3s-old` back at
+`/usr/local/bin/k3s`, start. Agents (stateless) are simply re-installed with
+the old `INSTALL_K3S_VERSION`.

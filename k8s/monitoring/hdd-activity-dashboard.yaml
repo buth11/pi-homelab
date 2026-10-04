@@ -1,0 +1,355 @@
+# Grafana dashboard "HDD activity (TrueNAS tank-bulk)" (uid: hdd-activity),
+# provisioned as a ConfigMap. The Grafana sidecar watches every namespace for
+# the label grafana_dashboard=1 and hot-reloads it.
+#
+#   kubectl apply -f k8s/monitoring/hdd-activity-dashboard.yaml
+#
+# Data comes from node-exporter running as an app on TrueNAS (job
+# truenas-storage, host label "truenas"). Scraping /proc does not wake disks.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-hdd-activity
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  hdd-activity.json: |
+    {
+      "uid": "hdd-activity",
+      "title": "HDD activity (TrueNAS tank-bulk)",
+      "description": "What keeps the two HDDs (sdk, sdl) awake: busy time, IOPS and throughput, from node-exporter on TrueNAS.",
+      "tags": [
+        "homelab",
+        "storage"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "refresh": "1m",
+      "time": {
+        "from": "now-24h",
+        "to": "now"
+      },
+      "templating": {
+        "list": []
+      },
+      "annotations": {
+        "list": []
+      },
+      "panels": [
+        {
+          "type": "state-timeline",
+          "id": 1,
+          "title": "Busy / idle timeline (sdk, sdl)",
+          "description": "Blue = disk doing I/O, green = idle. Gaps of 20+ min of green mean the 20-minute HDD Standby can take effect. Continuous blue means something keeps waking the disk.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 0,
+            "w": 24,
+            "h": 6
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "clamp_max(ceil(rate(node_disk_io_time_seconds_total{host=\"truenas\",device=~\"sdk|sdl\"}[5m])), 1)",
+              "legendFormat": "{{device}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "fillOpacity": 80,
+                "lineWidth": 0
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "idle",
+                      "color": "green",
+                      "index": 0
+                    },
+                    "1": {
+                      "text": "busy",
+                      "color": "blue",
+                      "index": 1
+                    }
+                  }
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "blue",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showValue": "never",
+            "mergeValues": true,
+            "rowHeight": 0.9,
+            "legend": {
+              "showLegend": false
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 2,
+          "title": "Disk busy % (sdk, sdl)",
+          "description": "Fraction of time each disk spent servicing I/O, 5-minute rate. 0 = idle.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 6,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "rate(node_disk_io_time_seconds_total{host=\"truenas\",device=~\"sdk|sdl\"}[5m])",
+              "legendFormat": "{{device}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 3,
+          "title": "IOPS (sdk, sdl)",
+          "description": "Read + write operations per second.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 6,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "rate(node_disk_reads_completed_total{host=\"truenas\",device=~\"sdk|sdl\"}[5m]) + rate(node_disk_writes_completed_total{host=\"truenas\",device=~\"sdk|sdl\"}[5m])",
+              "legendFormat": "{{device}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 4,
+          "title": "Throughput (sdk, sdl)",
+          "description": "Bytes per second read (A) and written (B).",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 14,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "rate(node_disk_read_bytes_total{host=\"truenas\",device=~\"sdk|sdl\"}[5m])",
+              "legendFormat": "read {{device}}",
+              "refId": "A",
+              "range": true
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "rate(node_disk_written_bytes_total{host=\"truenas\",device=~\"sdk|sdl\"}[5m])",
+              "legendFormat": "write {{device}}",
+              "refId": "B",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "id": 5,
+          "title": "Busy % over 24h, 1-minute resolution",
+          "description": "Raw 1-minute view to spot periodic wake-ups (e.g. at the same minute every hour).",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 14,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "rate(node_disk_io_time_seconds_total{host=\"truenas\",device=~\"sdk|sdl\"}[1m])",
+              "legendFormat": "{{device}}",
+              "refId": "A",
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        }
+      ]
+    }

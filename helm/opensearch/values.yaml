@@ -4,10 +4,10 @@ singleNode: true
 replicas: 1
 resources:
   requests:
-    memory: 1Gi
+    memory: 1500Mi
     cpu: 250m
   limits:
-    memory: 1.5Gi
+    memory: 2Gi
 opensearchJavaOpts: "-Xms512m -Xmx512m"
 persistence:
   enabled: true
