@@ -1,0 +1,19 @@
+# Expose Traefik's Prometheus metrics and let kube-prometheus-stack scrape them.
+# K3s runs its bundled Traefik as a HelmChart named "traefik" in kube-system;
+# a HelmChartConfig with the same name merges these values into that release,
+# so the change goes through the same Helm path K3s already uses.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    metrics:
+      prometheus:
+        service:
+          enabled: true
+        serviceMonitor:
+          enabled: true
+          additionalLabels:
+            release: kube-prometheus-stack

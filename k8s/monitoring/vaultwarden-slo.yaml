@@ -1,0 +1,75 @@
+# SLO for Vaultwarden: 99.5% availability (probe_success from the blackbox
+# probe in vaultwarden-probe.yaml), error budget 0.5%.
+# Burn-rate alerts follow the multi-window pattern from the Google SRE
+# workbook: a fast burn pages, a slow burn opens a ticket. Both need a long
+# and a short window to agree, which keeps alerts from firing on old spikes.
+# Burn-rate thresholds: 14.4 x 0.005 = 0.072 (fast), 6 x 0.005 = 0.03 (slow).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vaultwarden-slo
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: vaultwarden-slo.recording
+      interval: 30s
+      rules:
+        - record: vaultwarden:error_ratio:5m
+          expr: 1 - avg_over_time(probe_success{job="vaultwarden"}[5m])
+        - record: vaultwarden:error_ratio:30m
+          expr: 1 - avg_over_time(probe_success{job="vaultwarden"}[30m])
+        - record: vaultwarden:error_ratio:1h
+          expr: 1 - avg_over_time(probe_success{job="vaultwarden"}[1h])
+        - record: vaultwarden:error_ratio:6h
+          expr: 1 - avg_over_time(probe_success{job="vaultwarden"}[6h])
+        - record: vaultwarden:availability:30d
+          expr: avg_over_time(probe_success{job="vaultwarden"}[30d])
+    - name: vaultwarden-slo.alerts
+      rules:
+        - alert: VaultwardenErrorBudgetBurnFast
+          expr: vaultwarden:error_ratio:1h > 0.072 and vaultwarden:error_ratio:5m > 0.072
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Vaultwarden is burning its error budget fast (about 14x)
+            description: At this rate the 30-day 99.5% SLO is exhausted in about 2 days.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-unreachable-or-burning-its-error-budget
+        - alert: VaultwardenErrorBudgetBurnSlow
+          expr: vaultwarden:error_ratio:6h > 0.03 and vaultwarden:error_ratio:30m > 0.03
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Vaultwarden is burning its error budget steadily (about 6x)
+            description: At this rate the 30-day 99.5% SLO is exhausted in about 5 days.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-unreachable-or-burning-its-error-budget
+        - alert: VaultwardenProbeMissing
+          expr: absent(probe_success{job="vaultwarden"})
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: No Vaultwarden probe data (the probe itself is broken or not scraped)
+            description: Absence of data is treated as an outage, so the SLO cannot be measured.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-unreachable-or-burning-its-error-budget
+        - alert: VaultwardenCertExpiresSoon
+          expr: probe_ssl_earliest_cert_expiry{job="vaultwarden"} - time() < 21 * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: Vaultwarden TLS certificate expires in under 21 days
+            description: Renewal is manual (Hostido AutoSSL). Expiry date is in the alert value.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-tls-certificate-approaching-expiry
+        - alert: VaultwardenCertExpiresCritical
+          expr: probe_ssl_earliest_cert_expiry{job="vaultwarden"} - time() < 7 * 86400
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: Vaultwarden TLS certificate expires in under 7 days
+            description: Clients will start rejecting the connection. Renew now.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#vaultwarden-tls-certificate-approaching-expiry

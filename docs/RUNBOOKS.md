@@ -315,3 +315,26 @@ kube-system`, and a curl against the ingress hosts.
 `/var/lib/rancher/k3s/server/`, put `$BK/k3s-old` back at
 `/usr/local/bin/k3s`, start. Agents (stateless) are simply re-installed with
 the old `INSTALL_K3S_VERSION`.
+
+## Vaultwarden unreachable or burning its error budget
+
+**Alerts:** `VaultwardenErrorBudgetBurnFast` (critical), `VaultwardenErrorBudgetBurnSlow` (warning), `VaultwardenProbeMissing` (critical). Source: the blackbox probe in `k8s/monitoring/vaultwarden-probe.yaml` and the SLO rules in `k8s/monitoring/vaultwarden-slo.yaml`.
+
+The probe checks what a LAN or Tailscale client sees, so work through the path from the outside in:
+
+1. Is the probe itself healthy? `probe_success{job="vaultwarden"}` in Grafana. If it is missing, check the blackbox pod (`kubectl logs -n monitoring deploy/blackbox-prometheus-blackbox-exporter`) and the Prometheus target page. That is a monitoring problem, not a Vaultwarden one.
+2. Is Traefik answering? `curl -sk -o /dev/null -w "%{http_code}\n" --resolve vault.analitykbiznesowy.pl:443:192.168.50.50 https://vault.analitykbiznesowy.pl/`. Expect `200`. In the RED dashboard, check whether the errors are 5xx (backend) or the request rate dropped to zero (routing).
+3. Is the backend up? `kubectl get pods -n vaultwarden` and `kubectl describe pod` for restarts and probe failures. Check whether the pod is on `g3-worker3`. If the node is off (dashboard shutdown), Vaultwarden is down by design; see the g3 shutdown runbook above.
+4. Is the certificate still valid? `probe_ssl_earliest_cert_expiry` in Grafana. Renewal is manual; see the Vaultwarden TLS runbook above.
+5. Clients that reach it only over Tailscale: check the tailnet is connected on the device. Without it the request goes to public DNS and gets the Hostido placeholder page, which the probe does not see.
+
+After the fix, the slow and fast burn alerts clear on their own once the 5-minute and 30-minute windows recover. Record the outage in `docs/troubleshooting.md`, and check the monthly SLO panel in the Traefik RED dashboard.
+
+## TrueNAS pool filling up
+
+**Alerts:** `TrueNasPoolFillingUp` (warning, forecast within 4 days), `TrueNasPoolAlmostFull` (critical, above 85%). Source: node-exporter on TrueNAS, `k8s/monitoring/capacity-alerts.yaml`.
+
+1. Find the dataset that grew: TrueNAS UI (Storage, dataset usage) or `zfs list -o name,used,avail -s used` on TrueNAS.
+2. Snapshots keep deleted data. Check snapshot space before deleting files: `zfs list -t snapshot -o name,used -s used | tail`.
+3. Downloads and media are the usual growth. Check qBittorrent's completed-download folder and the arr media folders before deleting anything still seeded or indexed.
+4. Only after a clear cause: delete or move data, then confirm the forecast in Grafana (HDD activity dashboard, free space panel) moves back above the threshold.

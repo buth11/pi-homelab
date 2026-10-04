@@ -1,0 +1,20 @@
+# Synthetic availability + TLS probe for Vaultwarden, sent to Traefik's
+# LoadBalancer IP with the public Host/SNI so it exercises the real route
+# and the real Let's Encrypt certificate (expires 2026-11-22, manual renewal).
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: vaultwarden
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  jobName: vaultwarden
+  interval: 60s
+  module: http_vault
+  prober:
+    url: blackbox-prometheus-blackbox-exporter.monitoring.svc:9115
+  targets:
+    staticConfig:
+      static:
+        - https://192.168.50.50/

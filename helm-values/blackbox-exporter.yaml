@@ -1,0 +1,16 @@
+# Synthetic probes for user-facing endpoints. Probes are sent from inside the
+# cluster to the Traefik LoadBalancer IP, so the probe sees exactly what a
+# LAN client sees (TLS certificate, routing, status code).
+config:
+  modules:
+    http_vault:
+      prober: http
+      timeout: 10s
+      http:
+        valid_status_codes: [200]
+        fail_if_not_ssl: true
+        preferred_ip_protocol: ip4
+        headers:
+          Host: vault.analitykbiznesowy.pl
+        tls_config:
+          server_name: vault.analitykbiznesowy.pl

@@ -1,0 +1,35 @@
+# Capacity alerts for the TrueNAS ZFS pools, read from node-exporter on TrueNAS.
+# predict_linear forecasts the free space 4 days ahead from the last 6h of
+# trend, so the alert fires before the pool is full instead of after.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: truenas-capacity
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: truenas-capacity
+      rules:
+        - alert: TrueNasPoolFillingUp
+          expr: |
+            predict_linear(node_filesystem_avail_bytes{host="truenas",fstype="zfs",mountpoint=~"/mnt/(tank-bulk|tank-fast|scratch-nvme)"}[6h], 4 * 86400) < 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "ZFS pool {{ $labels.mountpoint }} is forecast to run out of space within 4 days"
+            description: Trend over the last 6 hours. Check which dataset grew (Reporting, or the HDD activity dashboard) before deleting anything.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#truenas-pool-filling-up
+        - alert: TrueNasPoolAlmostFull
+          expr: |
+            1 - node_filesystem_avail_bytes{host="truenas",fstype="zfs",mountpoint=~"/mnt/(tank-bulk|tank-fast|scratch-nvme)"}
+              / node_filesystem_size_bytes{host="truenas",fstype="zfs",mountpoint=~"/mnt/(tank-bulk|tank-fast|scratch-nvme)"} > 0.85
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ZFS pool {{ $labels.mountpoint }} is above 85% used"
+            description: ZFS slows down noticeably above roughly 80–85% on a copy-on-write pool. Act now.
+            runbook_url: https://github.com/buth11/pi-homelab/blob/main/docs/RUNBOOKS.md#truenas-pool-filling-up
