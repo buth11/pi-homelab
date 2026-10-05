@@ -36,6 +36,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 | [docs/architecture.md](docs/architecture.md) | Full design rationale behind the storage/network layout (the "why", not just the "what") |
 | [docs/SECURITY.md](docs/SECURITY.md) | Credential-handling policy, RBAC principles, network segmentation status |
 | [docs/security/](docs/security/) | Point-in-time audits and the external pentest report |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Phased improvement plan — **local only, gitignored** (it is a gap list, same rule as the audits) |
 | [docs/RUNBOOKS.md](docs/RUNBOOKS.md) | Prescriptive "if X happens, do Y" procedures |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Chronological incident log — what actually went wrong and how it was diagnosed |
 | [docs/postmortems/](docs/postmortems/) | Formal per-incident postmortems (template included) |
@@ -76,7 +77,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 - **k3s-burst-worker**: 192.168.50.30, Proxmox VM worker (all nodes on K3s v1.36.4 since 2026-09-19 — see docs/KUBERNETES.md)
 - **Proxmox VE**: 192.168.50.20 (mgmt) / 10.10.10.1 (storage net), GMKtec Topton FU02 AMD 7730U, 64GB RAM, 1TB SATA SSD + 2TB NVMe local
 - **TrueNAS SCALE**: 192.168.50.21 (mgmt) / 10.10.10.2 (storage net), GMKtec Topton AMD 5600U, 29GB RAM, 3 ZFS pools (~12.5 TiB usable)
-- **NAS (legacy)**: //ASUS/Crucial_2TB (SMB, 2TB, guest access) — media library migrated off this to TrueNAS, kept for qBittorrent working dir
+- **NAS (legacy)**: //ASUS/Crucial_2TB (SMB, 2TB) — media library migrated off this to TrueNAS, kept for qBittorrent working dir
 - **Router**: ASUS RT-AX86U, 192.168.50.1
 
 ## Network / IP Layout
@@ -100,7 +101,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 - **Vaultwarden**: namespace vaultwarden, self-hosted password manager, Traefik Ingress at vault.home.local + vault.analitykbiznesowy.pl (real Let's Encrypt cert via Hostido AutoSSL, split-DNS only via Pi-hole + Tailscale — see setup/07-vaultwarden-tls-hostido.md)
 - **Linkding**: namespace linkding, self-hosted bookmark manager synced across browsers via the official browser extension, Traefik Ingress at links.home.local + links.analitykbiznesowy.pl (same split-DNS pattern as Vaultwarden; currently mkcert, real cert pending — see setup/08-linkding-bookmarks.md)
 - **arr-stack** (Prowlarr/Sonarr/Radarr): namespace arr, on g3-worker3, GitOps-managed via ArgoCD
-- **Homelab Dashboard**: namespace dashboard, cluster control/WoL UI — gated behind HTTP Basic Auth at the nginx frontend (`dashboard-auth` Secret, see k8s/dashboard/auth-secret.yaml); further hardening still tracked internally, see docs/SECURITY.md#authentication-on-internal-services
+- **Homelab Dashboard**: namespace dashboard, cluster control/WoL UI — authentication at the nginx frontend (`dashboard-auth` Secret, see k8s/dashboard/auth-secret.yaml)
 - **File Browser**: namespace filebrowser, NAS file browser
 - **MinIO**: namespace minio, S3-compatible storage (also serves as the Terraform state backend)
 - **Uptime Kuma**: namespace uptime-kuma, status monitoring

@@ -5,9 +5,12 @@ k8s/vaultwarden/*.pem
 docs/security/trivy-reports/*.json
 docs/security/pentest-2026-08/
 docs/security/audit-*.md
+docs/ROADMAP.md
 .env-backups/
 *.pem
 *fullchain*
 *privkey*
 secrets/
 SRE/
+dashboard/.groupedtimelineinclude
+docs/security/open-items.md

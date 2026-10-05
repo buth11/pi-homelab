@@ -73,7 +73,7 @@ on `local-path` for exactly this reason worth calling out.
 
 ## Legacy NAS
 
-`//ASUS/Crucial_2TB` (SMB, 2TB, guest access) — the media library has
+`//ASUS/Crucial_2TB` (SMB, 2TB) — the media library has
 been fully migrated off this to TrueNAS `tank-bulk`; the only thing still
 pointed at it is qBittorrent's working/download directory (`nas-smb`
 StorageClass). Don't add new PVCs against it; it's being kept alive for

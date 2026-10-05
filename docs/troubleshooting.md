@@ -738,8 +738,7 @@ ran v1.36.2 while the apiserver was v1.35.5: an unsupported
 kubelet-newer-than-apiserver skew, documented as "known, not yet reconciled".
 
 **Fix:** removed the CronJobs and their RBAC (`shutdown-sa`, whose
-ClusterRole granted node delete/patch, was one of the two known
-least-privilege violations); g3 shutdown/wake already runs from the
+ClusterRole granted node delete/patch, far more than the job needed); g3 shutdown/wake already runs from the
 dashboard. Upgraded all four nodes to v1.36.4 in place (master, then
 workers), procedure in
 [RUNBOOKS.md](RUNBOOKS.md#upgrading-k3s-minorpatch). Two things that would

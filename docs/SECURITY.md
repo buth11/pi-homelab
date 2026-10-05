@@ -12,8 +12,8 @@
 literal value.** This has held up well in practice — a full history scan
 during the 2026-08-24 audit found zero committed API keys, SSH private
 keys, `.env` files, `.tfstate` files, or TLS private keys across the
-entire git history. The one exception (`WEBPASSWORD: "admin"` in
-`k8s/pihole/deployment.yaml`) is a known, open finding — see the audit.
+entire git history. Anything an audit does find is rotated first, then
+replaced with the placeholder pattern below.
 
 The pattern to follow, by resource type:
 
@@ -64,13 +64,11 @@ what's used** — not "get/list/watch" copied onto resources the workload
 never actually reads, and never `delete`/`patch` on `nodes` for anything
 that isn't node lifecycle tooling.
 
-One ServiceAccount currently violates this (see the audit for detail and
-fix plan). A second one, `shutdown-sa`, whose ClusterRole granted node
-delete/patch to a job that only scaled two Deployments, was removed on
-2026-09-19 together with the CronJobs it served.
-- `dashboard-backend` (`k8s/dashboard/rbac.yaml`) — ClusterRole is
-  arguably right-sized for the dashboard's *features*, but nothing gates
-  who can invoke those features (see below).
+Audits check every ServiceAccount against this; deviations are tracked
+internally until fixed. Example of a resolved one: `shutdown-sa`, whose
+ClusterRole granted node delete/patch to a job that only scaled two
+Deployments, was removed on 2026-09-19 together with the CronJobs it
+served.
 
 ## Authentication on internal services
 
@@ -82,25 +80,18 @@ Tailscale subnet router advertises that network to the tailnet — see
 [k8s/tailscale/connector.yaml](../k8s/tailscale/connector.yaml), which
 advertises the full `192.168.50.0/24`.
 
-This rule exists because of a concrete internal finding against one of
-this cluster's own services — tracked and remediated outside this public
-repo, not written up here in exploit-usable detail. Don't repeat the
+This rule is a lesson from an internal audit. Don't repeat the
 pattern on the next internal tool: if it can act on the cluster or the
 network, it needs an identity check in front of it before it ships, full
 stop.
 
 ## Network segmentation
 
-**There are currently no `NetworkPolicy` resources anywhere in this
-cluster** — confirmed during the 2026-08-24 audit (`kind: NetworkPolicy`
-returns zero matches repo-wide). Every pod can reach every other pod on
-the pod network regardless of namespace. This is a known, accepted gap
-for a single-operator homelab today, but it means the blast radius of
-*any* pod compromise (not just the dashboard) is "the whole cluster's pod
-network," not "one namespace." Worth revisiting once more than one
-untrusted or internet-adjacent workload runs here — first candidate would
-be namespace-scoped default-deny policies for `dashboard` and anything
-Tailscale-exposed.
+**Principle: a namespace should only accept the traffic it needs.**
+The target is a default-deny `NetworkPolicy` per namespace plus explicit
+allows (ingress controller → app, Prometheus → metrics, DNS egress),
+prioritising anything reachable from the tailnet. Coverage is checked in
+audits and tracked internally.
 
 ## Commit conventions relevant to security
 

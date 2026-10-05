@@ -64,7 +64,7 @@ over an out-of-band edit within its sync interval.
 
 | StorageClass | Backing | Use |
 |---|---|---|
-| `local-path` | node-local `hostPath` (K3s built-in) | default for config PVCs; **no replication, no snapshots** — see [SECURITY.md](SECURITY.md) for the Pi-hole finding this produced |
+| `local-path` | node-local `hostPath` (K3s built-in) | default for config PVCs; **no replication, no snapshots** |
 | `nas-smb` | SMB → `//ASUS/Crucial_2TB` | legacy; qBittorrent working dir only |
 | `smb-tank-fast` | SMB CSI → TrueNAS `tank-fast/k3s-pv` | general K3s PVs, ZFS-snapshotted |
 | `smb-tank-bulk-media` | SMB CSI → TrueNAS `tank-bulk/media` | Jellyfin library, `reclaimPolicy: Retain` |

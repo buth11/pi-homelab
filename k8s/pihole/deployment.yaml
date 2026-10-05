@@ -21,8 +21,11 @@ spec:
         env:
         - name: TZ
           value: "Europe/Warsaw"
-        - name: WEBPASSWORD
-          value: "admin"
+        - name: FTLCONF_webserver_api_password
+          valueFrom:
+            secretKeyRef:
+              name: pihole-auth
+              key: web-password
         - name: DNSMASQ_LISTENING
           value: "all"
         - name: PIHOLE_DNS_

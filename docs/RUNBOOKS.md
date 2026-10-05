@@ -117,12 +117,12 @@ There is no ACME client automating this — renewal is manual:
 **Symptom:** password set via the Pi-hole web UI reverts after a pod
 restart.
 
-This is expected given current config, not a bug to chase: `WEBPASSWORD`
-is hardcoded in `k8s/pihole/deployment.yaml` and gets reapplied on every
-container start (confirmed via logs — `Password ... set in config file`
-appears on every restart). Until that's moved to a `Secret`, don't bother
-changing it through the UI expecting it to persist — either accept the
-env-var value or edit the manifest directly.
+Expected: `FTLCONF_webserver_api_password` comes from the `pihole-auth`
+Secret and overrides the UI on every container start. Pi-hole v6 ignores
+the old v5 `WEBPASSWORD` variable entirely (it keeps whatever is in
+`pihole.toml` on the PVC). Don't change the password in the UI; rotate the
+Secret instead with the commands in
+[k8s/pihole/auth-secret.yaml](../k8s/pihole/auth-secret.yaml).
 
 ## g3-worker3 shutdown / wake cycle
 
@@ -162,7 +162,7 @@ scaled and nobody remembers triggering it:
 
 ## Rotating the dashboard's Basic Auth password
 
-The dashboard (`http://192.168.50.58`) is gated by HTTP Basic Auth —
+The dashboard is gated by HTTP Basic Auth at the nginx frontend — the
 credential lives in the `dashboard-auth` Secret (`.htpasswd` key), never
 committed. To rotate:
 

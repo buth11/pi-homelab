@@ -72,9 +72,6 @@ certificate/key-related is ever committed. `.gitignore` also has broad
   tied to the cluster, so this will not auto-renew. Needs a calendar
   reminder, or a proper automation (e.g. cert-manager with DNS-01 against
   Hostido, if their DNS API allows it).
-- Pi-hole's `WEBPASSWORD` is hardcoded in
-  [k8s/pihole/deployment.yaml](../k8s/pihole/deployment.yaml) instead of
-  a Secret -- resets to `admin` on every pod restart.
 - Pi-hole's PVCs use `local-path` (node-local `hostPath` on
   `pi4-worker2`), with no replication or snapshotting, unlike
   `smb-tank-fast`/`smb-tank-bulk` which are TrueNAS-backed and
