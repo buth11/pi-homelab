@@ -46,3 +46,8 @@ jobs:
       - uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: v0.64.0
+      - name: tflint
+        run: |
+          tflint --init
+          tflint --format compact
+
