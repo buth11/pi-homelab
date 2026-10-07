@@ -80,7 +80,7 @@ resource "kubernetes_deployment" "vaultwarden" {
 
           port {
             container_port = 80
-            name            = "http"
+            name           = "http"
           }
           volume_mount {
             name       = "data"
