@@ -105,6 +105,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 - **File Browser**: namespace filebrowser, NAS file browser
 - **MinIO**: namespace minio, S3-compatible storage (also serves as the Terraform state backend)
 - **Uptime Kuma**: namespace uptime-kuma, status monitoring
+- **Market Exporter**: namespace market, Prometheus exporter for USD/PLN, BTC and gold (Yahoo, CoinGecko, NBP) with level-crossing alerts routed to a dedicated ntfy topic (`category=market`) — see setup/10-market-exporter.md
 - **Prometheus/Grafana/Alertmanager**: namespace monitoring, Helm-managed (`helm/node-alerting`)
 - **MetalLB**: IP pool 192.168.50.50-80
 - **SMB CSI Driver**: StorageClass nas-smb -> //ASUS/Crucial_2TB
