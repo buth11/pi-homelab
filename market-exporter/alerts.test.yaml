@@ -1,0 +1,31 @@
+rule_files:
+  - /tmp/market-rules.yaml
+evaluation_interval: 30s
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'asset_price{asset="BTC",quote="USD",unit="coin",source="coingecko",pod="p1",instance="i1"}'
+        values: '84500x20 85200x30'
+      - series: 'asset_price{asset="USD",quote="PLN",unit="unit",source="yahoo",pod="p1",instance="i1"}'
+        values: '4.12x20 4.08x30'
+    alert_rule_test:
+      - eval_time: 23m
+        alertname: BtcCrossedLevelUp
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: BtcCrossedLevelUp
+        exp_alerts:
+          - exp_labels: {severity: notice, category: market, asset: BTC, quote: USD, unit: coin, source: coingecko}
+            exp_annotations: {summary: 'BTC przebił 85000 USD w górę'}
+      - eval_time: 40m
+        alertname: BtcCrossedLevelUp
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: BtcCrossedLevelDown
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: UsdPlnCrossedLevelDown
+        exp_alerts:
+          - exp_labels: {severity: notice, category: market, asset: USD, quote: PLN, unit: unit, source: yahoo}
+            exp_annotations: {summary: 'USD/PLN przebił 4.10 zł w dół'}
+

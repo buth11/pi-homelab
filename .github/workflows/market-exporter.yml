@@ -4,10 +4,12 @@ on:
     branches: [main]
     paths:
       - 'market-exporter/**'
+      - 'k8s/market-exporter/prometheusrule.yaml'
       - '.github/workflows/market-exporter.yml'
   pull_request:
     paths:
       - 'market-exporter/**'
+      - 'k8s/market-exporter/prometheusrule.yaml'
       - '.github/workflows/market-exporter.yml'
   workflow_dispatch:
 permissions:
@@ -28,6 +30,16 @@ jobs:
               run: pip install -r requirements.txt -r requirements-dev.txt
             - name: pytest
               run: pytest -q
+            - name: Install promtool                       # NEW
+              run: |
+                curl -sSL https://github.com/prometheus/prometheus/releases/download/v3.15.0/prometheus-3.15.0.linux-amd64.tar.gz \
+                  | sudo tar xz -C /usr/local/bin --wildcards --strip-components=1 '*/promtool'
+            - name: Alert rule unit tests                  # NEW
+              working-directory: .
+              run: |
+                python3 -c "import yaml; print(yaml.safe_dump(yaml.safe_load(open('k8s/market-exporter/prometheusrule.yaml'))['spec']))" > /tmp/market-rules.yaml
+                promtool check rules /tmp/market-rules.yaml
+                promtool test rules market-exporter/alerts.test.yaml
     build:
         name: Build image
         needs: test
