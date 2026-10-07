@@ -8,7 +8,7 @@ Sources:
   yahoo      USD/PLN and gold futures (GC=F, ~10 min delayed), unofficial API
   coingecko  BTC in USD and PLN, cached ~1-2 min on the free tier
   nbp        official NBP fixing for USD/PLN and gold (PLN per gram), once a
-             business day around 12:00 Europe/Warsaw
+             business day; timestamped at 00:00 Europe/Warsaw of its date
 """
 
 import logging
@@ -69,8 +69,10 @@ def parse_coingecko(data):
 
 
 def _nbp_ts(day):
-    # NBP publishes only a date; the fixing is announced around 12:00 Warsaw time.
-    return datetime.fromisoformat(day).replace(hour=12, tzinfo=WARSAW).timestamp()
+    # NBP publishes only a date, and not always at the same hour (the gold
+    # price can appear in the morning, the FX fixing around noon). Use the
+    # start of that day in Warsaw so the timestamp is never in the future.
+    return datetime.fromisoformat(day).replace(tzinfo=WARSAW).timestamp()
 
 
 def parse_nbp_rate(data):
