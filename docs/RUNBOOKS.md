@@ -389,3 +389,14 @@ The internal probe asks Pi-hole for `vault.home.local` and expects `192.168.50.5
 5. Check the pod: `kubectl get pods -n pihole` and `kubectl describe pod -n pihole <pod>` for restarts. Clients fall back to the router's DNS when Pi-hole is down, so symptoms can be intermittent.
 
 After the fix, the burn-rate alerts clear once the 5-minute and 30-minute windows recover. Record the incident in `docs/troubleshooting.md`.
+
+## Market price alerts not arriving / market exporter unhealthy
+
+Full procedure, verification checklist and alert design live in
+[setup/10-market-exporter.md](../setup/10-market-exporter.md#12-operations-runbook).
+Quick triage, in order: data fresh (`time() - asset_price_timestamp_seconds`),
+target up (`up{namespace="market"}`), rules loaded (`/api/v1/rules`,
+groups `market.*`), alert routed (`amtool config routes test
+category=market severity=notice` → `ntfy-market`), phone subscribed to the
+right topic. Remember level alerts are debounced: a crossing must hold for
+5 minutes and is reported once.
