@@ -35,6 +35,10 @@ alertmanager:
         webhook_configs:
           - url: "REPLACE_ME"
             send_resolved: false
+      - name: "ntfy-market"
+        webhook_configs:
+          - url: "REPLACE_ME?template=alertmanager"
+            send_resolved: false
     route:
       group_by: ['alertname']
       group_wait: 30s
@@ -45,6 +49,11 @@ alertmanager:
         - matchers: ['alertname = "Watchdog"']
           receiver: "deadman"
           repeat_interval: 5m
+        - matchers: ['category = "market"']
+          receiver: "ntfy-market"
+          group_by: ['alertname', 'asset']
+          group_wait: 10s
+          repeat_interval: 24h
         - matchers: ['severity = "critical"']
           receiver: "ntfy"
           repeat_interval: 4h
