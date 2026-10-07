@@ -1,5 +1,8 @@
 """Parser tests on real responses captured on 2026-10-07."""
 
+import time
+from datetime import date
+
 from exporter import parse_coingecko, parse_nbp_gold, parse_nbp_rate, parse_yahoo
 
 YAHOO_USDPLN = {
@@ -25,10 +28,18 @@ def test_coingecko_returns_usd_and_pln():
     assert all(s[2] == 1791350020 for s in samples)
 
 
-def test_nbp_rate_timestamp_is_noon_warsaw():
+def test_nbp_timestamp_is_start_of_day_warsaw():
     [(labels, price, ts)] = parse_nbp_rate(NBP_RATE)
     assert labels["source"] == "nbp" and price == 3.8901
-    assert ts == 1791280800  # 2026-10-06 12:00 CEST = 10:00 UTC
+    assert ts == 1791237600  # 2026-10-06 00:00 CEST = 2026-10-05 22:00 UTC
+
+
+def test_nbp_timestamp_never_in_future():
+    # Regression: today's gold price is published in the morning; a noon
+    # timestamp made its age negative in Prometheus (2026-10-07).
+    today = date.today().isoformat()
+    [(_, _, ts)] = parse_nbp_gold([{"data": today, "cena": 519.24}])
+    assert ts <= time.time()
 
 
 def test_nbp_gold_is_pln_per_gram():
