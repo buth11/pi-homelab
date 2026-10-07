@@ -1,0 +1,75 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: market-exporter
+  namespace: market
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+  - name: market.recording
+    rules:
+    - record: market:asset_price:max
+      expr: max without (pod, instance) (asset_price)
+  - name: market.levels
+    rules:
+    - alert: BtcCrossedLevelUp
+      expr: |
+        floor(market:asset_price:max{asset="BTC",quote="USD"} / 1000 + 1e-6) * 1000
+          > floor(market:asset_price:max{asset="BTC",quote="USD"} offset 15m / 1000 + 1e-6) * 1000
+      for: 5m
+      labels:
+        severity: notice
+        category: market
+      annotations:
+        summary: 'BTC przebił {{ printf "%.0f" $value }} USD w górę'
+    - alert: BtcCrossedLevelDown
+      expr: |
+        floor(market:asset_price:max{asset="BTC",quote="USD"} offset 15m / 1000 + 1e-6) * 1000
+          > floor(market:asset_price:max{asset="BTC",quote="USD"} / 1000 + 1e-6) * 1000
+      for: 5m
+      labels:
+        severity: notice
+        category: market
+      annotations:
+        summary: 'BTC przebił {{ printf "%.0f" $value }} USD w dół'
+    - alert: UsdPlnCrossedLevelUp
+      expr: |
+        floor(market:asset_price:max{asset="USD",quote="PLN",source="yahoo"} / 0.05 + 1e-6) * 0.05
+          > floor(market:asset_price:max{asset="USD",quote="PLN",source="yahoo"} offset 15m / 0.05 + 1e-6) * 0.05
+      for: 5m
+      labels:
+        severity: notice
+        category: market
+      annotations:
+        summary: 'USD/PLN przebił {{ printf "%.2f" $value }} zł w górę'
+    - alert: UsdPlnCrossedLevelDown
+      expr: |
+        floor(market:asset_price:max{asset="USD",quote="PLN",source="yahoo"} offset 15m / 0.05 + 1e-6) * 0.05
+          > floor(market:asset_price:max{asset="USD",quote="PLN",source="yahoo"} / 0.05 + 1e-6) * 0.05
+      for: 5m
+      labels:
+        severity: notice
+        category: market
+      annotations:
+        summary: 'USD/PLN przebił {{ printf "%.2f" $value }} zł w dół'
+    - alert: GoldCrossedLevelUp
+      expr: |
+        floor(market:asset_price:max{asset="XAU",quote="USD"} / 100 + 1e-6) * 100
+          > floor(market:asset_price:max{asset="XAU",quote="USD"} offset 15m / 100 + 1e-6) * 100
+      for: 5m
+      labels:
+        severity: notice
+        category: market
+      annotations:
+        summary: 'Złoto przebiło {{ printf "%.0f" $value }} USD/oz w górę'
+    - alert: GoldCrossedLevelDown
+      expr: |
+        floor(market:asset_price:max{asset="XAU",quote="USD"} offset 15m / 100 + 1e-6) * 100
+          > floor(market:asset_price:max{asset="XAU",quote="USD"} / 100 + 1e-6) * 100
+      for: 5m
+      labels:
+        severity: notice
+        category: market
+      annotations:
+        summary: 'Złoto przebiło {{ printf "%.0f" $value }} USD/oz w dół'
