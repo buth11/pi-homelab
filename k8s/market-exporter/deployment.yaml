@@ -22,7 +22,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: market-exporter
-        image: ghcr.io/buth11/pi-homelab/market-exporter:728918b32db70321aa2defe42d1e15448c0041a1
+        image: ghcr.io/buth11/pi-homelab/market-exporter:a270864fa3f436fef219684f01dff22285b37f7a
         ports:
         - name: metrics
           containerPort: 8000
