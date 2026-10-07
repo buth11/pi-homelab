@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: market-exporter
+  name: market-exporter
+  namespace: market
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: market-exporter
+  template:
+    metadata:
+      labels:
+        app: market-exporter
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: market-exporter
+        image: ghcr.io/buth11/pi-homelab/market-exporter:728918b32db70321aa2defe42d1e15448c0041a1
+        ports:
+        - name: metrics
+          containerPort: 8000
+        resources:
+          requests:
+            cpu: 10m
+            memory: 48Mi
+          limits:
+            memory: 96Mi
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
