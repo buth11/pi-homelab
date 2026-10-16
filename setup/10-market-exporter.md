@@ -9,14 +9,14 @@
 | | |
 |---|---|
 | **Owner** | Bartosz Suszko |
-| **Status** | Production (level-crossing alerts). Jump and source-health alerts planned, see [Roadmap](#14-known-limitations-and-roadmap) |
+| **Status** | Production (level-crossing alerts with crossing memory). Jump and source-health alerts planned, see [Roadmap](#14-known-limitations-and-roadmap) |
 | **Namespace** | `market` |
 | **Code** | [`market-exporter/`](../market-exporter/) |
 | **Manifests** | [`k8s/market-exporter/`](../k8s/market-exporter/) |
 | **Alert routing** | [`helm-values/kube-prometheus-stack.yaml`](../helm-values/kube-prometheus-stack.yaml) (`ntfy-market` receiver) |
 | **CI** | [`market-exporter.yml`](../.github/workflows/market-exporter.yml), [`validate.yml`](../.github/workflows/validate.yml) |
-| **Delivered in** | PRs #1-#7, 2026-10-07 |
-| **Last reviewed** | 2026-10-07 |
+| **Delivered in** | PRs #1-#7 (2026-10-07), #9-#10 crossing memory (2026-10-16) |
+| **Last reviewed** | 2026-10-16 |
 
 ## Contents
 
@@ -49,6 +49,9 @@ round price level, in either direction, without watching charts.
 - Fetch prices from three public sources and expose them as Prometheus metrics.
 - Alert on crossing a price grid: USD/PLN every 0.05 PLN, BTC every
   1,000 USD, gold every 100 USD/oz.
+- Notify about a level **once**: re-crossing the last crossed level, in
+  either direction, does not notify again until a different level is
+  crossed.
 - Deliver notifications to a dedicated ntfy topic, separate from
   infrastructure alerts.
 - Charts and history for free via the existing Prometheus/Grafana stack.
@@ -72,7 +75,7 @@ round price level, in either direction, without watching charts.
                                    │        Prometheus         │
                                    │  recording rule           │
                                    │  market:asset_price:max   │
-                                   │  6 level-crossing alerts  │
+                                   │  2 level-crossing alerts  │
                                    └─────────────┬─────────────┘
                                                  │ firing alerts (category=market)
                                    ┌─────────────▼─────────────┐
@@ -129,6 +132,8 @@ breaking change.
 | `asset_price_timestamp_seconds` | gauge | same as above | Unix time at which **the source** produced the price, not when it was scraped |
 | `exporter_fetch_errors_total` | counter | `source` | Failed fetches per source. Pre-initialised to 0 so `rate()` works from the start |
 | `exporter_last_success_timestamp_seconds` | gauge | `source` | Unix time of the last successful fetch |
+| `asset_last_crossed_level` | gauge | `asset`, `quote`, `unit`, `source` | Last price level crossed, either direction. Changes only when a **different** level is crossed. Absent until the first crossing after start |
+| `asset_level_crossings_total` | counter | same + `direction` (`up`/`down`) | Crossings of a new level. Pre-initialised to 0 for every tracked series, because `increase()` cannot see the first increment of a series that appears at 1 |
 
 Label values in use:
 
@@ -139,7 +144,9 @@ Label values in use:
 | `XAU` | `PLN` | `gram` | `nbp` |
 | `BTC` | `USD`, `PLN` | `coin` | `coingecko` |
 
-Cardinality is fixed at 6 price series plus 3 per-source series. Prices
+Level tracking covers three series: BTC/USD (CoinGecko), USD/PLN (Yahoo)
+and XAU/USD (Yahoo). Cardinality is fixed: 6 price series, 3 per-source
+series, 3 level gauges and 6 crossing counters. Prices
 and timestamps are values, never labels.
 
 Prometheus adds target labels (`pod`, `instance`, `namespace`, `job`,
@@ -153,7 +160,7 @@ Each decision is recorded with the alternative that was rejected.
 
 | # | Decision | Rejected alternative | Reason |
 |---|---|---|---|
-| D1 | Exporter only exposes metrics; all alert logic lives in PromQL rules | Script that compares prices and calls ntfy itself | Reuses Prometheus storage, Alertmanager deduplication/grouping and Grafana. Rules are reviewable config with unit tests (§13) |
+| D1 | Exporter only exposes metrics; alert logic lives in PromQL rules, **except crossing memory (D17)** | Script that compares prices and calls ntfy itself | Reuses Prometheus storage, Alertmanager deduplication/grouping and Grafana. Rules are reviewable config with unit tests (§13) |
 | D2 | One metric `asset_price` with labels | `btc_price`, `usd_price`, `gold_price` | One rule pattern covers every asset; consistent with Prometheus naming practice |
 | D3 | Export the source timestamp as its own metric | Rely on the scrape timestamp | Prometheus only knows when *it* read the value. Without the source timestamp, a stuck source looks identical to a stable price |
 | D4 | On fetch failure keep the last value | Drop the series | Staleness becomes visible in `asset_price_timestamp_seconds` instead of a gap that is hard to alert on |
@@ -163,12 +170,13 @@ Each decision is recorded with the alternative that was rejected.
 | D8 | `replicas: 1` | 2+ replicas | Two replicas would double external API calls for identical data. A short gap during rollout is acceptable |
 | D9 | Memory limit, CPU request, **no CPU limit** | CPU limit | CPU limits throttle even on idle nodes; this has already slowed another service in this cluster |
 | D10 | `ClusterIP` Service | `LoadBalancer` (MetalLB) | Metrics are consumed only inside the cluster |
-| D11 | Price **grid** computed in PromQL (`floor(price / step)`) | One rule per individual level | A grid needs no maintenance as the price moves; 6 rules cover all levels |
-| D12 | Debounce: band compared with 15 min ago, plus `for: 5m` | Fire on any band change | Prevents a burst of notifications when a price oscillates around a level. Cost: about 5 min delay |
+| D11 | Price **grid** (`floor(price / step)`), computed in the exporter since D17 | One rule per individual level | A grid needs no maintenance as the price moves; two generic rules cover every level of every tracked asset |
+| D12 | ~~Debounce: band compared with 15 min ago, plus `for: 5m`~~ **Superseded by D17 on 2026-10-16** | Fire on any band change | The debounce still let a price that oscillated slowly around one level notify every time it re-crossed it (observed for a week). Also cost about 5 min of delay |
 | D13 | Custom `severity: notice` + `category: market` | `severity: info` | `info` is routed to `null` and is suppressed by the existing `InfoInhibitor` rule |
 | D14 | Dedicated ntfy topic and receiver, `send_resolved: false` | Reuse the cluster topic | Market notifications must not drown infrastructure alerts. Level alerts auto-resolve, so a "resolved" message would be noise |
 | D15 | New receiver appended **last** in `receivers:` | Insert it anywhere | Real webhook URLs are injected by list index (`--set-string ...receivers[N]...`); appending keeps existing indices valid |
 | D16 | Rule unit tests live in `market-exporter/`, not in `k8s/market-exporter/` | Next to the PrometheusRule | `kubectl apply -f k8s/market-exporter/` would try to apply the test file and fail |
+| D17 | **Crossing memory in the exporter** (`LevelTracker`): remember the last crossed level per series and report a crossing only when the level differs, regardless of direction. Rules only react to the counter | Keep it in PromQL (e.g. `last_over_time` over a long window) | The requirement needs state with unbounded memory; PromQL rules only see a time window, and a windowed approximation would be complex and still forget. Trade-offs: state lives in pod memory, so a restart (in practice only a deploy) starts a fresh baseline and can repeat at most one notification; grid steps move from the rules into `LEVEL_STEPS` in code, so changing a step is an image release |
 
 ## 6. Security
 
@@ -223,7 +231,7 @@ k8s/market-exporter/
 ├── deployment.yaml          # pinned image SHA, resources, probes, securityContext
 ├── service.yaml             # ClusterIP, named port "metrics"
 ├── servicemonitor.yaml      # label release=kube-prometheus-stack
-└── prometheusrule.yaml      # recording rule + 6 alerts
+└── prometheusrule.yaml      # recording rule + 2 generic level alerts
 
 .github/workflows/
 ├── market-exporter.yml      # test (pytest + promtool) -> build/push image
@@ -277,37 +285,68 @@ One series per asset regardless of which pod reported it. All alerts use
 it, which keeps them short and avoids duplicate notifications during
 rollouts.
 
-### Level-crossing alerts
+The recording rule is not used by the level alerts any more (they react
+to the exporter's crossing counter); it is kept for the planned jump
+alerts.
 
-| Alert | Series | Step | Fires when |
-|---|---|---|---|
-| `BtcCrossedLevelUp` / `Down` | `asset="BTC", quote="USD"` (CoinGecko) | 1,000 USD | band changed vs 15 min ago and held for 5 min |
-| `UsdPlnCrossedLevelUp` / `Down` | `asset="USD", quote="PLN", source="yahoo"` | 0.05 PLN | as above |
-| `GoldCrossedLevelUp` / `Down` | `asset="XAU", quote="USD"` (Yahoo) | 100 USD/oz | as above |
+### Crossing memory (exporter, `LevelTracker`)
 
-Expression pattern (BTC, up):
+| Series | Step (`LEVEL_STEPS`) |
+|---|---|
+| BTC/USD, CoinGecko | 1,000 USD |
+| USD/PLN, Yahoo | 0.05 PLN |
+| XAU/USD, Yahoo | 100 USD/oz |
 
-```promql
-floor(market:asset_price:max{asset="BTC",quote="USD"} / 1000 + 1e-6) * 1000
-  > floor(market:asset_price:max{asset="BTC",quote="USD"} offset 15m / 1000 + 1e-6) * 1000
+On every new price:
+
+1. `band = floor(price / step + 1e-6)`. The `1e-6` guards against binary
+   floating point: `4.10 / 0.05` is `81.99999999999999`.
+2. First price after start: store the band as a baseline, report nothing.
+3. Band changed: the crossed level is `band x step` going up, or
+   `(band + 1) x step` going down (on a multi-band jump, the furthest
+   level). Rounded to 6 decimals (`82 x 0.05 = 4.1000000000000005`).
+4. Report only if this level differs from the last reported one; then set
+   `asset_last_crossed_level` and increment
+   `asset_level_crossings_total{direction}`.
+
+Example, BTC (step 1,000):
+
+```
+84 900 -> 85 100   crosses 85 000 up     notify  (last = 85 000)
+85 100 -> 84 950   crosses 85 000 down   silent  (same level)
+84 950 -> 85 050   crosses 85 000 up     silent  (same level)
+85 050 -> 83 900   crosses 84 000 down   notify  (last = 84 000)
+83 900 -> 84 100   crosses 84 000 up     silent  (same level)
+84 100 -> 85 100   crosses 85 000 up     notify  (differs from 84 000)
 ```
 
-- **Band:** `floor(price / step)`. A crossing is a change of band.
-- **`$value` is the crossed level:** the left-hand side is returned, so
-  "up" puts the *current* level on the left and "down" puts the level
-  from *15 minutes ago* on the left. The notification text formats it
-  with `printf` (`%.0f`, or `%.2f` for USD/PLN).
-- **`+ 1e-6`:** guards against binary floating point: `4.10 / 0.05`
-  evaluates to `81.99999999999999`, which `floor` would put in the wrong
-  band. Covered by a unit test.
-- **`source="yahoo"`** on USD/PLN is mandatory: without it both the Yahoo
-  and the NBP series match and every crossing fires twice.
-- **Debounce:** the comparison window (15 min) plus `for: 5m` means a
-  crossing is reported about 5 minutes after it happens, once, and only
-  if the price stays in the new band. The alert resolves itself after
-  about 15 minutes.
-- **Warm-up:** right after the recording rule is first deployed, `offset
-  15m` has no data, so no level alert can fire for 15 minutes.
+### Level-crossing alerts
+
+Two generic rules cover every tracked asset:
+
+```promql
+# MarketLevelCrossedUp (Down is identical with direction="down")
+max without (pod, instance) (asset_last_crossed_level)
+  and on (asset, quote, source)
+(sum without (pod, instance) (increase(asset_level_crossings_total{direction="up"}[5m])) > 0)
+```
+
+- **`and on (asset, quote, source)`** keeps the left-hand value, so
+  `$value` is the crossed level. The counter carries an extra
+  `direction` label, hence the explicit `on (...)`.
+- **No `for:`**: noise is removed by the crossing memory, so the alert
+  fires on the next evaluation. End-to-end delay is roughly one poll
+  interval plus one scrape (1-3 min); gold adds its ~10 min data delay.
+- **`increase(...[5m]) > 0`**: the alert is active for about 5 minutes,
+  then resolves on its own (`send_resolved: false`, so no second message).
+- **`level: '{{ $value }}'`** is a templated label: every crossed level is
+  a distinct alert, so two different levels crossed within 5 minutes
+  produce two notifications instead of updating one firing alert.
+- **Message:** `{{ if eq $labels.quote "PLN" }}` formats PLN quotes with
+  two decimals (`4.10`) and the rest as integers (`85000`).
+- **Deploy order:** exporter first (producer of the new metrics), rules
+  second (consumer). The other way round leaves a window with no working
+  level alerts and no error.
 
 Labels on every market alert: `severity: notice`, `category: market`.
 
@@ -430,7 +469,7 @@ Run after every deploy. Each step checks one link of the chain in §2.
 | 4 | Service has endpoints | `kubectl -n market get endpointslices -l kubernetes.io/service-name=market-exporter` | the pod IP |
 | 5 | Prometheus scraping | PromQL `up{namespace="market"}` | `1` |
 | 6 | Data sane | PromQL `time() - asset_price_timestamp_seconds` | all values positive; Yahoo FX < 2 min, gold about 10 min, CoinGecko < 5 min, NBP hours |
-| 7 | Rules loaded | `GET /api/v1/rules`, groups `market.*` | `market.recording` 1 rule, `market.levels` 6 rules, `health=ok` |
+| 7 | Rules loaded | `GET /api/v1/rules`, groups `market.*` | `market.recording`: `market:asset_price:max`; `market.levels`: `MarketLevelCrossedUp`, `MarketLevelCrossedDown`; `health=ok` |
 | 8 | Routing live | `GET /api/v2/status` on Alertmanager, `config.original` contains `ntfy-market` | count > 0 |
 | 9 | End to end | `amtool alert add ... category=market severity=notice --end=+5m` | notification on the **market** topic within about 10 s |
 | 10 | Regression | `amtool alert add ... severity=warning --end=+5m` | notification on the **cluster** topic |
@@ -442,8 +481,11 @@ operator -> ConfigMap -> kubelet volume sync -> config-reloader -> reload.
 
 ### No market notifications although the price clearly crossed a level
 
-1. Was it a real crossing that **held for 5 minutes**? Oscillation around a
-   level is intentionally ignored (D12).
+1. Was it a **different** level than the last one crossed? Re-crossing the
+   same level is intentionally silent (D17). Check what the exporter
+   decided: `kubectl -n market logs deploy/market-exporter | grep "level crossed"`
+   and `asset_last_crossed_level`. After a pod restart the memory starts
+   from a fresh baseline.
 2. Is the alert firing in Prometheus? `ALERTS{category="market"}`.
 3. Is the data fresh? Check 6 in §11. A stale source cannot cross anything.
 4. Is the rule healthy? Check 7 in §11.
@@ -477,26 +519,25 @@ operator -> ConfigMap -> kubelet volume sync -> config-reloader -> reload.
 
 ### Change a grid step or add an asset
 
-1. Edit `k8s/market-exporter/prometheusrule.yaml`.
-2. Add or adjust a case in `market-exporter/alerts.test.yaml`, including a
-   value exactly on a level.
-3. Locally: extract `spec` and run `promtool check rules` and
-   `promtool test rules`. CI runs the same on the PR.
-4. Merge, `kubectl apply -f k8s/market-exporter/prometheusrule.yaml`,
-   check 7 in §11.
+Steps live in `LEVEL_STEPS` in `market-exporter/exporter.py`, so this is
+an image release (§8), not a rule change:
 
-A new asset also needs a fetcher, parser and test in the exporter (code
-change, release process in §8).
+1. Change or add the entry in `LEVEL_STEPS` (a new asset also needs a
+   fetcher, parser, the unit mapping used to pre-initialise counters, and
+   tests).
+2. Add a `LevelTracker` test with a price exactly on a level.
+3. Release: PR -> merge -> image -> tag bump -> `kubectl apply` of the
+   Deployment. The rules need no change; they work for any tracked series.
 
 ## 13. Testing strategy
 
 | Layer | Tool | What it proves | Where it runs |
 |---|---|---|---|
-| Parsers | pytest (5 tests on real captured API responses) | JSON shape handling, label sets, NBP timestamp never in the future (regression) | CI `test` job, locally |
+| Parsers and crossing memory | pytest (10 tests: parsers on real captured API responses, `LevelTracker` scenarios) | JSON shape handling, label sets, NBP timestamp never in the future (regression); baseline, a level reported once while the price dances around it, a different level in either direction, multi-band jump, floating-point edge case | CI `test` job, locally |
 | Manifests | `kubeconform -strict` + CRD catalog | schema validity, no unknown fields (typos) | `validate.yml` on every PR |
 | Manifests vs live cluster | `kubectl apply --dry-run=server` | API server acceptance incl. admission | manually before applying |
 | Rule syntax | `promtool check rules` | every PromQL expression parses | CI `test` job |
-| Rule behaviour | `promtool test rules` (synthetic series) | 5-min debounce, correct `$value` and message text, auto-resolve, up does not trigger down, floating-point edge case 4.10 | CI `test` job |
+| Rule behaviour | `promtool test rules` (synthetic counter and gauge series) | no alert before a crossing, alert right after with the correct `level` label and message text, auto-resolve after the 5-min window, direction handling, `4.10` formatting | CI `test` job |
 | Routing | `amtool check-config`, `amtool config routes test` | new route works, existing routes unchanged | manually before `helm upgrade` |
 | End to end | synthetic alerts via `amtool alert add` | delivery to the correct phone topic | manually after deploy |
 
@@ -511,7 +552,8 @@ PromQL function) before being trusted as green.
 | Jump alerts not implemented yet | The size and speed of a move are not reported; only level crossings are. For gold, a 1 % move (about 40 USD) can happen entirely inside one 100 USD band and produce no notification | Add `BTC ±5 %/1h`, `USD/PLN and gold ±1 %/1d` using `market:asset_price:max / (... offset 1h) - 1`, with promtool tests |
 | No source-health alerts | A dead source is visible only on dashboards | Alert on `exporter_last_success_timestamp_seconds` age, `rate(exporter_fetch_errors_total)`, and `up == 0`. Use fetch success, not data age, for Yahoo FX, because FX data legitimately goes stale at weekends |
 | Yahoo is an unofficial API | May break without notice | Health alerts above; NBP as an official fallback for daily values |
-| Gold intraday data is ~10 min delayed | Crossings reported about 15 min after they happen (delay + debounce) | Accepted for v1 |
+| Gold intraday data is ~10 min delayed | Gold crossings reported about 10-13 min after they happen | Accepted |
+| Crossing memory is in pod memory | After a restart (deploy) the first crossing can repeat the last notified level once | Accepted (D17); persistence would need a PVC or reading the last value back from Prometheus |
 | NBP timestamp precision is one day | Staleness thresholds for NBP must be in days, covering long weekends | Accepted by design (D5) |
 | Helm values not validated in CI | A routing typo is caught only by the manual `amtool` step | Add an `amtool` job to `validate.yml` |
 | No Grafana dashboard yet | Charts need ad-hoc queries | Dashboard ConfigMap in `k8s/monitoring/`, same pattern as the existing ones |
@@ -531,6 +573,8 @@ PromQL function) before being trusted as green.
 | L8 | A CI job was green but `tflint` never ran | The step that runs the tool was missing; only the installer step existed | Confirm in logs that the step actually executed ("green is not verified") |
 | L9 | `python-version: 3.12` unquoted; `on:` read as `true` by PyYAML | YAML 1.1 type coercion | Quote versions and anything that could become a number or boolean |
 | L10 | A rule-only PR would not have triggered rule tests | `paths` filter did not include the rule file | When adding a test, check the trigger covers every input of that test |
+| L11 | A week of real notifications showed repeated messages for the same level when a price oscillated slowly around it | Time-window debounce (D12) has no memory beyond its window | Requirement needed state; moved to the exporter (D17). Validate alert design against real data, not only synthetic tests |
+| L12 | While editing rules the recording rule was deleted by accident; all tests stayed green | The new tests did not use the recording rule | `promtool check rules` reported 2 rules instead of the expected 3. Green tests prove only what they test; know the expected counts |
 
 ## 16. Change history
 
@@ -543,6 +587,9 @@ PromQL function) before being trusted as green.
 | #5 | `fafc3ac` | Deploy image `a270864` |
 | #6 | `ae29120` | Recording rule, 6 level-crossing alerts, promtool check + unit tests in CI |
 | #7 | `f6d5af5` | Alertmanager `ntfy-market` receiver and `category=market` route |
+| #8 | `7785a2b` | This document |
+| #9 | `50ef207` | Crossing memory (`LevelTracker`), two generic alerts replace six debounced ones |
+| #10 | `2956fc1` | Deploy image `50ef207` |
 
 ## 17. References
 
