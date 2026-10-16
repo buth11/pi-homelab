@@ -3,7 +3,7 @@
 import time
 from datetime import date
 
-from exporter import parse_coingecko, parse_nbp_gold, parse_nbp_rate, parse_yahoo
+from exporter import LevelTracker, parse_coingecko, parse_nbp_gold, parse_nbp_rate, parse_yahoo
 
 YAHOO_USDPLN = {
     "chart": {"result": [{"meta": {"symbol": "USDPLN=X", "regularMarketPrice": 3.8925,
@@ -46,3 +46,29 @@ def test_nbp_gold_is_pln_per_gram():
     [(labels, price, _)] = parse_nbp_gold(NBP_GOLD)
     assert labels == {"asset": "XAU", "quote": "PLN", "unit": "gram", "source": "nbp"}
     assert price == 523.96
+
+
+def test_tracker_first_price_is_only_a_baseline():
+    assert LevelTracker(1000).update(84900) is None
+
+
+def test_tracker_reports_a_level_once_while_price_dances_around_it():
+    t = LevelTracker(1000)
+    events = [t.update(p) for p in (84900, 85100, 84950, 85050, 84980, 85200)]
+    assert events == [None, (85000, "up"), None, None, None, None]
+
+
+def test_tracker_reports_a_different_level_in_either_direction():
+    t = LevelTracker(1000)
+    events = [t.update(p) for p in (84900, 85100, 84950, 83900, 84100, 85100)]
+    assert events == [None, (85000, "up"), None, (84000, "down"), None, (85000, "up")]
+
+
+def test_tracker_big_jump_reports_the_furthest_level():
+    t = LevelTracker(1000)
+    assert [t.update(p) for p in (84900, 87100)] == [None, (87000, "up")]
+
+
+def test_tracker_float_edge_case_usdpln():
+    t = LevelTracker(0.05)
+    assert [t.update(p) for p in (4.12, 4.08)] == [None, (4.1, "down")]
