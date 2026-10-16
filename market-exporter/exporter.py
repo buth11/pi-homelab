@@ -1,8 +1,10 @@
 """Prometheus exporter for market prices: USD/PLN, BTC and gold.
 
 Each source is polled on its own interval and its prices are exposed as
-gauges on /metrics. Alerting (big moves, level breaks, stale data) is done
-in Prometheus rules, not here: this process only fetches and exposes.
+gauges on /metrics. Alerting is done in Prometheus rules. The one piece of
+logic kept here is level-crossing memory (LevelTracker): it needs state that
+outlives any PromQL time window, so the exporter decides when a *new* level
+has been crossed and the rules only react to that.
 
 Sources:
   yahoo      USD/PLN and gold futures (GC=F, ~10 min delayed), unofficial API
@@ -12,6 +14,7 @@ Sources:
 """
 
 import logging
+import math
 import os
 import signal
 import sys
@@ -41,6 +44,24 @@ FETCH_ERRORS = Counter("exporter_fetch_errors_total", "Failed fetches per source
 LAST_SUCCESS = Gauge(
     "exporter_last_success_timestamp_seconds", "Unix time of the last successful fetch.", ["source"]
 )
+
+LAST_LEVEL = Gauge(
+    "asset_last_crossed_level",
+    "Last price level crossed, in either direction. Changes only when a different level is crossed.",
+    LABELS,
+)
+LEVEL_CROSSINGS = Counter(
+    "asset_level_crossings",
+    "Crossings of a new price level; re-crossing the last level is not counted.",
+    LABELS + ["direction"],
+)
+
+# Price grid per tracked series: (asset, quote, source) -> step.
+LEVEL_STEPS = {
+    ("BTC", "USD", "coingecko"): 1000,
+    ("USD", "PLN", "yahoo"): 0.05,
+    ("XAU", "USD", "yahoo"): 100,
+}
 
 # (asset, quote, unit, yahoo symbol)
 YAHOO_SYMBOLS = [
@@ -85,6 +106,58 @@ def parse_nbp_gold(data):
     last = data[-1]
     labels = {"asset": "XAU", "quote": "PLN", "unit": "gram", "source": "nbp"}
     return [(labels, float(last["cena"]), _nbp_ts(last["data"]))]
+
+
+# --- level crossing memory --------------------------------------------------
+
+
+class LevelTracker:
+    """Remembers the last level crossed so a price dancing around one level
+    reports it once, however many times it re-crosses it in either direction.
+
+    The first price only sets the baseline. State lives in memory, so a pod
+    restart starts a fresh baseline (at most one repeated notification).
+    """
+
+    def __init__(self, step):
+        self.step = step
+        self.band = None
+        self.last_level = None
+
+    def update(self, price):
+        """Return (level, direction) when a level different from the last
+        crossed one is crossed, otherwise None."""
+        # 1e-6 guards against binary float error: 4.10 / 0.05 = 81.999...
+        band = math.floor(price / self.step + 1e-6)
+        if self.band is None or band == self.band:
+            self.band = band
+            return None
+        if band > self.band:
+            direction, level = "up", band * self.step
+        else:
+            direction, level = "down", (band + 1) * self.step
+        self.band = band
+        level = round(level, 6)  # 82 * 0.05 = 4.1000000000000005
+        if level == self.last_level:
+            return None
+        self.last_level = level
+        return level, direction
+
+
+TRACKERS = {key: LevelTracker(step) for key, step in LEVEL_STEPS.items()}
+
+
+def track_levels(labels, price):
+    tracker = TRACKERS.get((labels["asset"], labels["quote"], labels["source"]))
+    if tracker is None:
+        return
+    crossed = tracker.update(price)
+    if crossed is None:
+        return
+    level, direction = crossed
+    LAST_LEVEL.labels(**labels).set(level)
+    LEVEL_CROSSINGS.labels(**labels, direction=direction).inc()
+    log.info("level crossed %s/%s level=%s direction=%s", labels["asset"], labels["quote"], level, direction)
 
 
 # --- fetchers ---------------------------------------------------------------
@@ -145,6 +218,7 @@ def poll(source, fetch):
     for labels, price, ts in samples:
         PRICE.labels(**labels).set(price)
         PRICE_TS.labels(**labels).set(ts)
+        track_levels(labels, price)
         log.info("price %s/%s source=%s value=%s", labels["asset"], labels["quote"], source, price)
     LAST_SUCCESS.labels(source=source).set(time.time())
 
@@ -162,6 +236,13 @@ def main():
     # Create the error counters at 0 so rate() works before the first failure.
     for source in SOURCES:
         FETCH_ERRORS.labels(source=source)
+    # Same for crossings: increase() cannot see the first crossing of a
+    # series that only appears at 1.
+    units = {("BTC", "USD"): "coin", ("USD", "PLN"): "unit", ("XAU", "USD"): "ounce"}
+    for (asset, quote, source) in LEVEL_STEPS:
+        for direction in ("up", "down"):
+            LEVEL_CROSSINGS.labels(asset=asset, quote=quote, unit=units[(asset, quote)],
+                                   source=source, direction=direction)
 
     running = True
 

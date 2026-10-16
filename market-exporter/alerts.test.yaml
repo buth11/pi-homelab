@@ -4,28 +4,30 @@ evaluation_interval: 30s
 tests:
   - interval: 1m
     input_series:
-      - series: 'asset_price{asset="BTC",quote="USD",unit="coin",source="coingecko",pod="p1",instance="i1"}'
-        values: '84500x20 85200x30'
-      - series: 'asset_price{asset="USD",quote="PLN",unit="unit",source="yahoo",pod="p1",instance="i1"}'
-        values: '4.12x20 4.08x30'
+      - series: 'asset_level_crossings_total{asset="BTC",quote="USD",unit="coin",source="coingecko",direction="up",pod="p1",instance="i1"}'
+        values: '0x10 1x30'
+      - series: 'asset_level_crossings_total{asset="BTC",quote="USD",unit="coin",source="coingecko",direction="down",pod="p1",instance="i1"}'
+        values: '0x40'
+      - series: 'asset_last_crossed_level{asset="BTC",quote="USD",unit="coin",source="coingecko",pod="p1",instance="i1"}'
+        values: '_x10 85000x30'
+      - series: 'asset_level_crossings_total{asset="USD",quote="PLN",unit="unit",source="yahoo",direction="down",pod="p1",instance="i1"}'
+        values: '0x10 1x30'
+      - series: 'asset_last_crossed_level{asset="USD",quote="PLN",unit="unit",source="yahoo",pod="p1",instance="i1"}'
+        values: '_x10 4.1x30'
     alert_rule_test:
-      - eval_time: 23m
-        alertname: BtcCrossedLevelUp
+      - eval_time: 9m
+        alertname: MarketLevelCrossedUp
         exp_alerts: []
-      - eval_time: 27m
-        alertname: BtcCrossedLevelUp
+      - eval_time: 12m
+        alertname: MarketLevelCrossedUp
         exp_alerts:
-          - exp_labels: {severity: notice, category: market, asset: BTC, quote: USD, unit: coin, source: coingecko}
-            exp_annotations: {summary: 'BTC przebił 85000 USD w górę'}
-      - eval_time: 40m
-        alertname: BtcCrossedLevelUp
+          - exp_labels: {severity: notice, category: market, level: "85000", asset: BTC, quote: USD, unit: coin, source: coingecko}
+            exp_annotations: {summary: 'BTC/USD przebił 85000 w górę'}
+      - eval_time: 20m
+        alertname: MarketLevelCrossedUp
         exp_alerts: []
-      - eval_time: 27m
-        alertname: BtcCrossedLevelDown
-        exp_alerts: []
-      - eval_time: 27m
-        alertname: UsdPlnCrossedLevelDown
+      - eval_time: 12m
+        alertname: MarketLevelCrossedDown
         exp_alerts:
-          - exp_labels: {severity: notice, category: market, asset: USD, quote: PLN, unit: unit, source: yahoo}
-            exp_annotations: {summary: 'USD/PLN przebił 4.10 zł w dół'}
-
+          - exp_labels: {severity: notice, category: market, level: "4.1", asset: USD, quote: PLN, unit: unit, source: yahoo}
+            exp_annotations: {summary: 'USD/PLN przebił 4.10 w dół'}
