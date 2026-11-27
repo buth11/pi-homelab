@@ -161,3 +161,28 @@ qBittorrent picked up automatically.
 adds failure modes. For gluetun, a startupProbe (which only orders
 startup) is enough.
 
+
+## Addendum 2: gluetun OOM-kill loop after the move to Switzerland (no leak)
+
+**What happened.** The built-in `protonvpn` provider makes gluetun keep its
+~21k-server list in memory. Each tunnel restart parses the list again: a
+forced restart measured a **471 MiB** peak. The old 256Mi limit came from
+the single-server `custom` setup. About an hour after deploy, gluetun's
+self-healing restarted the tunnel, the kernel OOM-killed it, and every new
+start died the same way: 24 kills in an hour. `KubePodNotReady`,
+`KubeDeploymentReplicasMismatch` and `QbittorrentVpnDown` paged.
+
+**Impact.** About 70 minutes without connectivity. **No leak**: the pod
+firewall stayed at DROP throughout.
+
+**Fix.**
+- Memory limit raised to 1Gi, request to 384Mi.
+- `GOMEMLIMIT=700MiB`, so the Go GC works well before the hard limit.
+
+**Verified.** A forced tunnel restart (VPN endpoint blocked) peaked at
+471 MiB and recovered without a container restart. Steady state is about
+75 MiB.
+
+**Lesson.** Size memory limits from the worst case (a reconnect), not from
+the steady state, and read the real peak from cgroup `memory.peak`. Here
+the Prometheus working-set graph hid the spikes completely.

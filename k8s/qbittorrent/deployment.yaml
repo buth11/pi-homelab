@@ -113,6 +113,8 @@ spec:
           value: "off"
         - name: TZ
           value: "Europe/Warsaw"
+        - name: GOMEMLIMIT
+          value: "700MiB"
         startupProbe:
           exec:
             command: ["/gluetun-entrypoint", "healthcheck"]
@@ -126,11 +128,17 @@ spec:
         - name: qbt-port-forward
           mountPath: /scripts
           readOnly: true
+        # With the built-in protonvpn provider gluetun keeps its ~21k-server
+        # list in memory: steady state ~360 MiB anon (measured via cgroup
+        # memory.stat; the Prometheus working-set graph showed much less), with
+        # spikes when the tunnel restarts and the list is parsed again. The old
+        # 256Mi limit OOM-killed it in a loop (24 kills on 2026-11-27).
+        # GOMEMLIMIT (env above) makes the Go GC work before the hard limit.
         resources:
           requests:
-            memory: 32Mi
+            memory: 384Mi
           limits:
-            memory: 256Mi
+            memory: 1Gi
       containers:
       - name: qbittorrent
         image: lscr.io/linuxserver/qbittorrent:latest
