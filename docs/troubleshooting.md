@@ -789,6 +789,57 @@ short of memory, which matters on the 4 GB Raspberry Pi control plane.
 **Lesson:** size requests from `max_over_time(...[7d])` per container. A 6h
 dashboard window and per-pod sums both hide the real picture.
 
+## 2026-11-25 -- Samsung TV Jellyfin app asked for login on every launch
+
+**Symptom:** since early November the Jellyfin app on the TV (Tizen) showed
+the login screen every time it was opened. Logging in worked, and playback
+was fine afterwards.
+
+**What it was not:** lost data. `/config` is on a `local-path` PVC, the pod
+had been up for 27 days with no restarts, and `jellyfin.db` was still being
+written.
+
+**Root cause:** the Deployment used `jellyfin/jellyfin:latest` with
+`imagePullPolicy: Always`. On the cold start after the 2026-10-29 power
+outage (see [postmortems/2026-10-29-power-outage-cold-start-gaps.md](postmortems/2026-10-29-power-outage-cold-start-gaps.md))
+the kubelet pulled a new image and the server upgraded to **12.4.0**
+without anyone choosing to. The startup migration rewrote
+`/config/config/system.xml` at 16:14 that day, and it now contained
+`<EnableLegacyAuthorization>false</EnableLegacyAuthorization>`. The TV
+client is "Jellyfin for Tizen 0.1.0 … with Jellyfin-10.10.z". It still
+sends its token the old way (legacy query parameter or header). Each
+session in the logs showed the same pattern:
+
+```
+Authentication request for "root" has succeeded.
+Logging out access token "..."
+Error processing request: "Token is required". URL "GET" "/socket"
+```
+
+The login succeeded, but the WebSocket was rejected as having no token. On
+the next launch the client treated its stored token as invalid and showed
+the login screen again.
+
+**Fix:**
+1. Set `EnableLegacyAuthorization` to `true` in `system.xml`. The previous
+   file was kept as `system.xml.bak-20261125` on the PVC. The trade-off is
+   that tokens can end up in URLs and logs; that is acceptable for a
+   LAN/Tailscale-only service. Set it back to `false` once the TV app is
+   updated to a 12.x-compatible build.
+2. Pinned the image in `k8s/jellyfin/deployment.yaml` to
+   `12.4.0@sha256:fea863d0…`, the same digest that was already running, so
+   no version change. Also set `imagePullPolicy: IfNotPresent`. Upgrades are
+   now a deliberate edit, not a side effect of a reboot.
+3. While doing this, synced the repo manifest's media claim
+   (`jellyfin-media` → `jellyfin-media-v2`) to what has been live since
+   July. A plain `kubectl apply` of the old file would have left the pod
+   Pending on a non-existent PVC.
+
+**Lesson:** `:latest` plus `Always` turns every pod restart, including
+unplanned ones like a power cut, into an untested major upgrade. Pin
+apps with clients that are not updated in step with the server, which
+covers anything with a TV or mobile app.
+
 ## 2026-11-27 -- qBittorrent had been leaking the home IP for months (VPN "up", no traffic in it)
 
 **Symptom:** none. Found by asking whether torrents really went through the

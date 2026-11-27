@@ -21,7 +21,11 @@ spec:
         - 109
       containers:
       - name: jellyfin
-        image: jellyfin/jellyfin:latest
+        # Pinned 2026-11-25: :latest + pull Always silently upgraded 10.x -> 12.4.0
+        # on the 2026-10-29 cold start and broke the Tizen TV client login.
+        # Upgrade deliberately: bump tag+digest here, check client compatibility.
+        image: jellyfin/jellyfin:12.4.0@sha256:fea863d0cd9ec445985d9c75fc6ed64e38a1d2766cf0c250a33d553f4fc1b771
+        imagePullPolicy: IfNotPresent
         env:
         - name: JELLYFIN_PublishedServerUrl
           value: "http://192.168.50.56"
@@ -41,7 +45,7 @@ spec:
           claimName: jellyfin-config
       - name: media
         persistentVolumeClaim:
-          claimName: jellyfin-media
+          claimName: jellyfin-media-v2
       - name: dri
         hostPath:
           path: /dev/dri
