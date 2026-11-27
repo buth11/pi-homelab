@@ -93,6 +93,24 @@ allows (ingress controller → app, Prometheus → metrics, DNS egress),
 prioritising anything reachable from the tailnet. Coverage is checked in
 audits and tracked internally.
 
+**Proxmox host firewall (pve-firewall).** Incoming traffic is denied by
+default. Management access (SSH 22, Web UI 8006, API 3128, ICMP) is
+allowed from pi4-master (192.168.50.10) only. This came out of the
+2026-08 pentest.
+
+One narrower exception was added on 2026-11-27. The IPSet
+`dashboard-nodes` (192.168.50.12, 192.168.50.30) may reach **port 22
+only**. The reason is that the dashboard backend runs the SMART scan for
+the Disks tab over SSH. It runs with `hostNetwork` and can be scheduled
+on any node except g3-worker3, so its source IP is not always
+pi4-master's.
+
+What those nodes can do on Proxmox is limited by the `smartreport`
+account. It is key-only, its `authorized_keys` entries carry
+`restrict,from=`, and its sudo is limited to `smartctl`. Web UI and API
+stay restricted to pi4-master, and g3-worker3 stays blocked (verified
+with raw TCP tests from each node). See smart-report/README.md.
+
 ## Commit conventions relevant to security
 
 This repo already follows Conventional Commits consistently

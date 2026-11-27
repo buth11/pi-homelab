@@ -52,7 +52,7 @@ details and that disk's history.
 | WRITTEN | Total host writes over the drive's life. NVMe: `data_units_written`. SATA: ATA Device Statistics `Logical Sectors Written`. Attribute 241 is a last resort because its unit differs by vendor (it is GiB on the g3 SATA SSD). |
 | WEAR | The drive's own endurance counter: NVMe `percentage_used`, SATA "Percentage Used Endurance Indicator", or a named life-remaining attribute. It can go past 100%. |
 | GB/DAY | Write rate. With history, it is measured per calendar day against the **oldest** snapshot. Without history it is the lifetime average per *power-on* day (marked `*`). That overstates the rate on g3-worker3, which is shut down part of the day. |
-| LIFE LEFT | The more pessimistic of two estimates: (a) the % used trend (needs ≥ 60 days of history, because the counter moves in whole percent), otherwise the lifetime average; (b) rated TBW from [endurance.conf](endurance.conf) at the current GB/DAY. |
+| LIFE LEFT | The more pessimistic of two estimates: (a) the % used trend (needs ≥ 60 days of history, because the counter moves in whole percent); (b) rated TBW from [endurance.conf](endurance.conf) at the current GB/DAY. **`~` = rough estimate from the lifetime average**, used until there is history. It never raises an alert, because power-on hours are unreliable: some firmware reports nonsense in Device Statistics (attribute 9 is then used instead), and some NVMe drives stop counting in low-power states (Micron 2200: 296 h after months in service). Drives under 720 h get no lifetime estimate at all. |
 | STATUS | `OK` / `WARN` / `CRIT`. `SKIP` = HDD spun down. `INFO` = no SMART to read (SD card, virtual disk). |
 
 Warnings are raised for: SMART health failed, NVMe critical warning or
@@ -94,7 +94,10 @@ SMART). `buth11` already has passwordless sudo there.
 cd ansible && ansible-playbook -i inventory.ini site.yml --tags smartmontools
 ```
 
-**Proxmox** (smartmontools is preinstalled), as root:
+**Proxmox** (smartmontools is preinstalled). pve-firewall allows SSH only
+from pi4-master plus the IPSet `dashboard-nodes` (.12, .30), so the dashboard
+backend can reach it from any node it is scheduled on (see
+docs/SECURITY.md, "Network segmentation"). As root:
 
 ```bash
 apt install -y sudo
