@@ -1,70 +1,136 @@
-# smart-report — on-demand SMART wear report for every disk
+# smart-report — SMART wear report for every disk
 
-One command collects SMART data from every disk in the homelab (K3s nodes,
-Proxmox, TrueNAS) over SSH. It prints health, how much has been written,
-wear, write rate per day and projected remaining life. Each run also
-appends a snapshot to a local history, and the trend comes from that
-history. Run it every week or two and the projection settles into
-something you can plan replacements and purchases from.
+Collects SMART data from every disk in the homelab (K3s nodes, Proxmox,
+TrueNAS) over SSH and answers one question: **how fast is each drive wearing
+out, and how long will it last at the current usage?** Every scan is stored
+in SQLite, and the projections come from that history. Scan every few days
+and the numbers settle into something you can plan purchases from.
+
+There are two front ends with the same code and the same numbers:
+
+- **Dashboard, Disks tab** (http://192.168.50.58). *Scan now* runs a scan from
+  the dashboard backend. The long-term history lives there.
+- **CLI.** By default it asks the dashboard to scan and prints the result;
+  `--local` scans over SSH from your machine.
 
 ```bash
-./smart-report/smart_report.py                    # all hosts, records a snapshot
-./smart-report/smart_report.py --only truenas     # one host (repeatable)
-./smart-report/smart_report.py --no-save          # look without recording
-./smart-report/smart_report.py --history          # recorded history, no SSH
-./smart-report/smart_report.py --json             # normalized data, for scripts
+./smart-report/smart_report.py                 # scan via the dashboard, print the table
+./smart-report/smart_report.py --no-scan       # last dashboard scan, no new scan
+./smart-report/smart_report.py --history [SN]  # per-disk history
+./smart-report/smart_report.py --json          # analysed data, for scripts
+./smart-report/smart_report.py --local         # SSH from here, local SQLite history
 ```
 
 Exit code: `0` all OK, `1` a warning or an unreachable host, `2` something
-critical.
+critical. The CLI needs Python 3.9+ and nothing else.
 
-Requirements on the machine running it: Python 3.9+ (standard library only)
-and SSH keys to the hosts in [hosts.conf](hosts.conf).
+**Dashboard login for the CLI.** The dashboard sits behind HTTP Basic Auth.
+Put the login in `~/.netrc` and `chmod 600` it:
 
-## Dashboard tab
+```
+machine 192.168.50.58 login <user> password <password>
+```
 
-The same report is in the Homelab Dashboard (http://192.168.50.58, **Disks**
-tab). *Scan now* runs it from the dashboard backend. Click a row for
-details and that disk's history.
+Alternatively, set `SMART_DASHBOARD_USER` / `SMART_DASHBOARD_PASSWORD`.
 
-- **Same code.** The backend imports [smart_report.py](smart_report.py),
-  which is copied into the image through the buildx named context
-  `smartreport` (see `dashboard/backend/Dockerfile`). Its logic lives in
-  `dashboard/backend/smart.py`.
-- **hosts.conf and endurance.conf are baked into the image.** Changing
-  either one means pushing to `main`; CI rebuilds the image because
-  `smart-report/**` is in its trigger paths. Then run
-  `kubectl rollout restart deployment/dashboard-backend -n dashboard`.
-- **SSH key.** SSH uses the dashboard's own key (Secret `dashboard-ssh-key`,
-  an ed25519 key despite the `id_rsa` file name), not your laptop key. Any
-  host the tab should reach must accept both keys. See below.
-- **Separate history.** History is stored in the `smart-history` ConfigMap in
-  the `dashboard` namespace, separate from the CLI's local file. It is a
-  ConfigMap rather than a PVC so the dashboard does not depend on SMB/TrueNAS
-  and is not pinned to a node. That matters because the dashboard is what
-  wakes g3-worker3. The oldest lines are trimmed past ~800 KB, which is a
-  few hundred scans.
+## How wear is judged
 
-## Reading the table
+**SSD / NVMe.** Two measures are computed, and the **higher** one is shown
+as WEAR:
 
-| Column | Meaning |
+1. **Bytes written as a % of the manufacturer's TBW** (from
+   [endurance.conf](endurance.conf)). TBW LEFT = rated TBW minus bytes
+   written. This measure is continuous and its basis is clear, which makes it
+   the main planning number.
+2. **The drive's own counter**: NVMe `percentage_used` or SATA "Percentage
+   Used Endurance Indicator". It counts actual NAND wear, including write
+   amplification. When it runs ahead of the TBW measure, the drive wears
+   faster than its host writes suggest. The Micron 2200 in TrueNAS does
+   this: 9% on its own counter against 6% of TBW.
+
+LIFE LEFT is the smaller of:
+
+- TBW left divided by the current write rate;
+- the trend of the drive's own counter, once there are ≥ 60 days of
+  history (the counter moves in whole percent, so shorter spans are noise).
+
+TBW is a warranty figure, not the point of failure, so these projections are
+conservative.
+
+**HDD.** Spinning disks do not wear out by bytes written. The report tracks:
+
+- **Load/unload cycles vs. rating.** WD Red is rated for 600,000 cycles. This
+  is the WEAR column for HDDs, and LIFE LEFT is the remaining cycle budget at
+  the current cycle rate.
+- **Workload.** Read + written TB per year against the rated workload (WD
+  Red: 180 TB/year). A WARN is raised above 100%.
+- **Start/stop per day.** This shows the cost of the spin-down from
+  [truenas/hdd-idle](../truenas/hdd-idle/hdd-idle.sh).
+- **Media errors.** HDDs mostly fail suddenly rather than linearly, and the
+  best predictors are *growing* reallocated, pending or uncorrectable sector
+  counts. See the alerts below.
+
+**Rates** (GB/day, cycles/day) are least-squares slopes over calendar time
+in the last 30 and 90 days. The higher of the two is used, so a recent burst
+of writes is not averaged away. Counter resets are handled.
+
+Without history, the report falls back to a lifetime average per power-on
+hour. That value is marked `*` (GB/DAY) and `~` (LIFE LEFT) and never raises
+an alert, because power-on hours are unreliable:
+
+- Some SATA firmware reports nonsense in Device Statistics: SanDisk X400
+  shows 135 h there and 8710 h in attribute 9. The larger value is used.
+- Some NVMe drives stop counting in low-power states: the Micron 2200 shows
+  296 h after months in service.
+- Drives under 720 h get no lifetime estimate at all.
+
+## Alerts
+
+| Condition | Level |
 |---|---|
-| WRITTEN | Total host writes over the drive's life. NVMe: `data_units_written`. SATA: ATA Device Statistics `Logical Sectors Written`. Attribute 241 is a last resort because its unit differs by vendor (it is GiB on the g3 SATA SSD). |
-| WEAR | The drive's own endurance counter: NVMe `percentage_used`, SATA "Percentage Used Endurance Indicator", or a named life-remaining attribute. It can go past 100%. |
-| GB/DAY | Write rate. With history, it is measured per calendar day against the **oldest** snapshot. Without history it is the lifetime average per *power-on* day (marked `*`). That overstates the rate on g3-worker3, which is shut down part of the day. |
-| LIFE LEFT | The more pessimistic of two estimates: (a) the % used trend (needs ≥ 60 days of history, because the counter moves in whole percent); (b) rated TBW from [endurance.conf](endurance.conf) at the current GB/DAY. **`~` = rough estimate from the lifetime average**, used until there is history. It never raises an alert, because power-on hours are unreliable: some firmware reports nonsense in Device Statistics (attribute 9 is then used instead), and some NVMe drives stop counting in low-power states (Micron 2200: 296 h after months in service). Drives under 720 h get no lifetime estimate at all. |
-| STATUS | `OK` / `WARN` / `CRIT`. `SKIP` = HDD spun down. `INFO` = no SMART to read (SD card, virtual disk). |
+| SMART health failed, NVMe critical warning, spare blocks at threshold | CRIT |
+| Reallocated / pending / uncorrectable sectors, NVMe media errors **grew** in the last 7 days | CRIT |
+| …the same counters are non-zero but stable | WARN |
+| UDMA CRC errors (cable) or device error log entries **grew** in the last 7 days | WARN |
+| …the same counters are non-zero but stable | info only (old history) |
+| Wear ≥ 70% / ≥ 90% | WARN / CRIT |
+| Projected life < 3 years / < 1 year (history-based only) | WARN / CRIT |
+| HDD workload above the rated TB/year | WARN |
+| Temperature ≥ 70 °C SSD, ≥ 50 °C HDD | WARN |
 
-Warnings are raised for: SMART health failed, NVMe critical warning or
-spare blocks at the threshold, media errors, reallocated, pending or
-uncorrectable sectors, CRC errors, wear ≥ 70% (critical at 90%), ≥ 80% of
-rated TBW, projected life under 3 years (critical under 1), and
-temperature ≥ 70 °C for SSDs or ≥ 50 °C for HDDs. All thresholds are
-constants at the top of the script.
+All thresholds are constants at the top of [smart_report.py](smart_report.py).
 
-**Fill in [endurance.conf](endurance.conf)** for each SSD (TBW from the
-datasheet). Without it the projection depends only on the drive's
-coarse % used counter.
+## Storage and backup
+
+- **Dashboard (main history).** SQLite at `/data/smart.db` on the
+  `smart-data` local-path PVC, on pi4-master. The backend Deployment is
+  pinned there with a matching nodeSelector, as CLAUDE.md requires.
+  - **Not on SMB:** SQLite needs real file locking.
+  - **Backup:** after every scan the database is copied with `VACUUM INTO` to
+    MinIO bucket `smart-report`, as `smart.db` (latest) and
+    `daily/smart-YYYY-MM-DD.db`.
+  - **When g3-worker3 is off:** MinIO runs there, so the copy fails. The tab
+    shows that, and the next scan retries.
+  - **Bucket credentials:** a MinIO user `smart-report-backup` with a
+    bucket-only policy. Its keys are in the Secret `smart-backup-minio`
+    (`access-key`, `secret-key`), which is not committed.
+- **CLI `--local`.** `~/.local/share/smart-report/smart.db`. On first use it
+  imports the old `history.jsonl`, if present.
+- Both stores hold serial numbers, so both are kept out of the repo. Disks
+  are matched by serial number, so moving a disk keeps its history.
+
+**Restoring the dashboard history from MinIO:**
+
+```bash
+kubectl scale deploy/dashboard-backend -n dashboard --replicas=0
+# copy smart.db from the bucket into the PVC (e.g. a one-off pod on pi4-master
+# mounting smart-data, then `mc cp`), then:
+kubectl scale deploy/dashboard-backend -n dashboard --replicas=1
+```
+
+**Changing hosts.conf or endurance.conf.** Both are baked into the backend
+image. Push to `main` (CI rebuilds on `smart-report/**`), then run
+`kubectl rollout restart deployment/dashboard-backend -n dashboard`.
 
 ## Spun-down HDDs are not woken
 
@@ -72,14 +138,6 @@ smartctl runs with `-n standby` and disks are found with `--scan`, not
 `--scan-open`. Neither sends a command to a sleeping disk. A tank-bulk HDD
 that [truenas/hdd-idle](../truenas/hdd-idle/hdd-idle.sh) has spun down shows
 as `SKIP`. To see its data, run the report while the pool is in use.
-
-## History
-
-Stored in `~/.local/share/smart-report/history.jsonl`, one line per disk per
-run. It is kept outside the repo on purpose: it holds serial numbers, and
-the repo syncs to GitHub. Disks are matched by serial number, so moving a
-disk to another host or slot does not break its trend. Delete the file to
-start over.
 
 ## Host setup
 
@@ -95,9 +153,8 @@ cd ansible && ansible-playbook -i inventory.ini site.yml --tags smartmontools
 ```
 
 **Proxmox** (smartmontools is preinstalled). pve-firewall allows SSH only
-from pi4-master plus the IPSet `dashboard-nodes` (.12, .30), so the dashboard
-backend can reach it from any node it is scheduled on (see
-docs/SECURITY.md, "Network segmentation"). As root:
+from pi4-master, which is where the dashboard backend runs. Your laptop's
+traffic reaches Proxmox through pi4-master as well. As root:
 
 ```bash
 apt install -y sudo

@@ -1,0 +1,17 @@
+# SQLite history for the Disks tab (dashboard/backend/smart.py).
+# local-path = node-local; the backend Deployment is pinned to pi4-master
+# with a matching nodeSelector. Not SMB: SQLite needs real file locking.
+# No snapshots on local-path: the backend copies the database to MinIO
+# (bucket smart-report) after every scan.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smart-data
+  namespace: dashboard
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

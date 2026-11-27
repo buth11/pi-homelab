@@ -12,6 +12,7 @@ kubectl apply -f "$K8S_DIR/rbac.yaml"
 kubectl apply -f "$K8S_DIR/configmap.yaml"
 kubectl apply -f "$K8S_DIR/nginx-configmap.yaml"
 kubectl apply -f "$K8S_DIR/service.yaml"
+kubectl apply -f "$K8S_DIR/smart-pvc.yaml"
 
 echo ""
 echo "==> Checking SSH key secret..."

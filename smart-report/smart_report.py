@@ -1,54 +1,83 @@
 #!/usr/bin/env python3
-"""On-demand SMART wear report for every disk in the homelab.
+"""SMART wear report for every disk in the homelab.
 
-Connects to each host in hosts.conf over SSH, reads `smartctl -x -j` for
-every disk, prints a wear/health table and appends a snapshot to a local
-history file. Wear *rate* (GB written per day, % used per year) and the
-projected remaining life come from comparing against earlier snapshots,
-so the report gets more useful every time it is run.
+Two ways to run it:
 
-Spun-down HDDs are skipped, not woken: smartctl runs with `-n standby`,
-which keeps truenas/hdd-idle working.
+    ./smart_report.py                 # ask the dashboard to scan, print the result
+    ./smart_report.py --no-scan       # show the dashboard's last scan
+    ./smart_report.py --history [SN]  # per-disk history from the dashboard
+    ./smart_report.py --local         # SSH from this machine, local SQLite history
 
-Only the Python standard library is used. Usage:
+The dashboard (Disks tab) holds the long-term history in SQLite on
+pi4-master, so the default mode only talks to its API. --local is the
+fallback for when the dashboard is down.
 
-    ./smart_report.py                # all hosts, save snapshot
-    ./smart_report.py --only g3-worker3
-    ./smart_report.py --no-save      # look without recording history
-    ./smart_report.py --json         # normalized data as JSON
-    ./smart_report.py --history      # per-disk history, no SSH
+How wear is judged:
+  SSD/NVMe  bytes written vs the manufacturer's TBW (endurance.conf), and the
+            drive's own "% used" counter; the higher of the two counts.
+            Remaining life = TBW left / current write rate.
+  HDD       load/unload cycles vs rating, yearly workload (read + written)
+            vs rating, start/stop rate. Media errors (reallocated, pending,
+            uncorrectable) raise an alert when they grow between scans.
+Rates are least-squares slopes over the last 30 and 90 days of history
+(calendar time, not power-on hours); the higher one is used.
 
+Spun-down HDDs are skipped, not woken (`--scan` + `-n standby`), so
+truenas/hdd-idle keeps working. Standard library only.
 Full description: README.md in this directory.
 """
 
 import argparse
+import base64
 import concurrent.futures
 import datetime as dt
 import json
+import netrc
 import os
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_HOSTS = os.path.join(HERE, "hosts.conf")
-DEFAULT_ENDURANCE = os.path.join(HERE, "endurance.conf")
+DEFAULT_SPECS = os.path.join(HERE, "endurance.conf")
 # Outside the repo on purpose: the history holds disk serial numbers and the
 # repo is a Syncthing folder pushed to GitHub.
-DEFAULT_HISTORY = os.path.expanduser("~/.local/share/smart-report/history.jsonl")
+DEFAULT_DB = os.path.expanduser("~/.local/share/smart-report/smart.db")
+OLD_JSONL = os.path.expanduser("~/.local/share/smart-report/history.jsonl")
+DEFAULT_DASHBOARD = os.environ.get("SMART_DASHBOARD", "http://192.168.50.58")
 
-SSH_TIMEOUT = 90  # seconds per host; a busy HDD self-test can be slow
+SSH_TIMEOUT = 90  # seconds per host
 
-# Thresholds. Kept here, in one place, so they are easy to tune.
-WARN_USED_PCT = 70
-CRIT_USED_PCT = 90
+# Thresholds, in one place so they are easy to tune.
+WARN_WEAR_PCT = 70
+CRIT_WEAR_PCT = 90
 WARN_YEARS_LEFT = 3
 CRIT_YEARS_LEFT = 1
 WARN_TEMP_SSD = 70
 WARN_TEMP_HDD = 50
-WARN_TBW_PCT = 80
-MIN_HISTORY_DAYS = 0.8  # shorter gaps give a noisy rate
-MIN_PCT_TREND_DAYS = 60  # see add_rates()
-MIN_LIFETIME_POH = 720  # hours; below this a lifetime average is noise
+MIN_HISTORY_DAYS = 0.8     # shortest span a rate is computed over
+MIN_30D_SPAN_DAYS = 7      # the 30-day rate needs at least this much data
+MIN_PCT_TREND_DAYS = 60    # "% used" moves in whole percent: needs a long span
+MIN_LIFETIME_POH = 720     # hours; below this a lifetime average is noise
+COUNTER_WINDOW_DAYS = 7    # error-counter growth stays flagged this long
+
+# Counters that indicate media damage: non-zero is a warning, growth is critical.
+MEDIA_COUNTERS = (
+    ("realloc", "reallocated sectors"),
+    ("pending", "pending sectors"),
+    ("offline_unc", "offline uncorrectable sectors"),
+    ("reported_unc", "reported uncorrectable errors"),
+    ("media_errors", "NVMe media errors"),
+)
+# Counters that only matter when they grow (a static value is old history).
+GROWTH_COUNTERS = (
+    ("crc", "UDMA CRC errors (cable/connector)"),
+    ("err_log", "device error log entries"),
+)
 
 # Runs on the remote host via `bash -s`. Prints marker lines that
 # parse_remote() splits on; smartctl JSON goes between them unchanged.
@@ -99,36 +128,40 @@ def read_hosts(path):
                 continue
             parts = line.split()
             if len(parts) < 2:
-                sys.exit(f"{path}: bad line (need: NAME SSH_TARGET): {line}")
+                raise ValueError(f"{path}: bad line (need: NAME SSH_TARGET): {line}")
             hosts.append((parts[0], parts[1]))
     return hosts
 
 
-def read_endurance(path):
-    """model substring -> rated TBW (terabytes written)."""
+def read_specs(path):
+    """endurance.conf -> [(model substring, {tbw, load_cycles, workload})].
+    Value part: a bare number (= TBW) or key=value pairs."""
     table = []
     if not os.path.exists(path):
         return table
     with open(path) as f:
-        for line in f:
+        for n, line in enumerate(f, 1):
             line = line.split("#", 1)[0].strip()
             if not line or "|" not in line:
                 continue
-            model, tbw = line.rsplit("|", 1)
-            try:
-                table.append((model.strip().lower(), float(tbw)))
-            except ValueError:
-                sys.exit(f"{path}: TBW is not a number: {line}")
+            model, values = line.split("|", 1)
+            spec = {}
+            for part in values.replace("|", " ").split():
+                key, _, val = part.partition("=") if "=" in part else ("tbw", "", part)
+                if key not in ("tbw", "load_cycles", "workload"):
+                    raise ValueError(f"{path}:{n}: unknown key {key!r}")
+                spec[key] = float(val)
+            table.append((model.strip().lower(), spec))
     return table
 
 
-def rated_tbw(model, table):
+def spec_for(model, table):
     model = (model or "").lower()
     best = None
-    for sub, tbw in table:
+    for sub, spec in table:
         if sub in model and (best is None or len(sub) > len(best[0])):
-            best = (sub, tbw)
-    return best[1] if best else None
+            best = (sub, spec)
+    return best[1] if best else {}
 
 
 # --------------------------------------------------------------------------
@@ -159,9 +192,9 @@ def collect_host(name, target, runner=ssh_cli_runner):
     return parse_remote(name, out)
 
 
-def run_report(hosts, history, tbw_table, runner=ssh_cli_runner, now=None):
-    """Collect from all hosts in parallel and analyse.
-    Returns (now, disks, host_errors)."""
+def run_report(hosts, history, specs, runner=ssh_cli_runner, now=None):
+    """Collect from all hosts in parallel and analyse against `history`
+    (readings, oldest first). Returns (now, disks, host_errors)."""
     now = now or dt.datetime.now(dt.timezone.utc).astimezone()
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(hosts), 1)) as ex:
         results = list(ex.map(lambda h: collect_host(h[0], h[1], runner), hosts))
@@ -173,8 +206,11 @@ def run_report(hosts, history, tbw_table, runner=ssh_cli_runner, now=None):
         for n in r["notes"]:
             host_errors.append((r["host"], n))
         disks.extend(r["disks"])
+    by_serial = {}
+    for h in history:
+        by_serial.setdefault(h.get("serial"), []).append(h)
     for d in disks:
-        add_rates(d, history, now, tbw_table)
+        analyse(d, by_serial.get(d.get("serial"), []), now, specs)
         classify(d)
     return now, disks, host_errors
 
@@ -228,7 +264,7 @@ def parse_disk(host, dev, text, rc):
     try:
         j = json.loads(text)
     except ValueError:
-        d.update(kind="?", level="WARN", issues=["smartctl returned no JSON"])
+        d.update(kind="?", level="WARN", issues=["WARN: smartctl returned no JSON"])
         return d
 
     msgs = " ".join(m.get("string", "") for m in j.get("smartctl", {}).get("messages", []))
@@ -276,18 +312,23 @@ def parse_disk(host, dev, text, rc):
         d["issues"].append("CRIT: smartctl: disk failing (exit bit 3)")
     if rc & 0b10000:
         d["issues"].append("WARN: an attribute was below threshold in the past (exit bit 4)")
-    if rc & 0b1000000:
-        d["issues"].append("WARN: errors in the device error log (exit bit 6)")
     if rc & 0b10000000:
         d["issues"].append("WARN: self-test log reports errors (exit bit 7)")
+    # Exit bit 6 (error log has entries) is handled through the err_log
+    # counter instead: only growth matters, old entries stay forever.
     return d
 
 
 def parse_nvme(d, log):
-    units = log.get("data_units_written")
-    d["written"] = units * 512_000 if units is not None else None  # NVMe unit = 1000 x 512 B
+    unit = 512_000  # NVMe data unit = 1000 x 512 B
+    if log.get("data_units_written") is not None:
+        d["written"] = log["data_units_written"] * unit
+    if log.get("data_units_read") is not None:
+        d["read"] = log["data_units_read"] * unit
     d["used_pct"] = log.get("percentage_used")
     d["unsafe_shutdowns"] = log.get("unsafe_shutdowns")
+    d["media_errors"] = log.get("media_errors")
+    d["err_log"] = log.get("num_err_log_entries")
     spare, thr = log.get("available_spare"), log.get("available_spare_threshold")
     if log.get("critical_warning"):
         d["issues"].append(f"CRIT: NVMe critical_warning = {log['critical_warning']:#x}")
@@ -295,8 +336,6 @@ def parse_nvme(d, log):
         d["issues"].append(f"CRIT: spare blocks at the threshold ({spare}% <= {thr}%)")
     elif spare is not None and spare < 100:
         d["issues"].append(f"spare blocks dropped to {spare}% (threshold {thr}%)")
-    if log.get("media_errors"):
-        d["issues"].append(f"WARN: media_errors = {log['media_errors']}")
 
 
 def parse_ata(d, j):
@@ -310,9 +349,8 @@ def parse_ata(d, j):
 
     # Power-on hours: smartctl prefers the Device Statistics value, which
     # some firmware gets badly wrong (SanDisk X400: 135 h in devstat vs
-    # 8710 h in attribute 9; WD Blue WDS250G2B0A: 0 vs 21900). An
-    # undercount is the dangerous direction, because every per-hour rate is
-    # then inflated, so take the larger of the two.
+    # 8710 h in attribute 9; WD Blue WDS250G2B0A: 0 vs 21900). Take the
+    # larger of the two.
     if 9 in attrs and attrs[9].get("name") == "Power_On_Hours":
         s = str(attrs[9]["raw"].get("string", "")).split("h")[0].split()[0]
         if s.isdigit() and 0 < int(s) < 200_000:
@@ -322,15 +360,14 @@ def parse_ata(d, j):
     # attribute 241 is not (sectors, 32 MiB or GiB depending on vendor).
     if devstat.get("Logical Sectors Written") is not None:
         d["written"] = devstat["Logical Sectors Written"] * lbs
-        d["written_src"] = "devstat"
     elif raw(246) is not None and attrs[246].get("name") in (
             "Total_Host_Sector_Write", "Total_LBAs_Written"):  # Crucial/Micron (BX500: no devstat)
         d["written"] = raw(246) * lbs
-        d["written_src"] = "attr246"
     elif raw(241) is not None:
         d["written"] = raw(241) * lbs
-        d["written_src"] = "attr241?"
         d["issues"].append("bytes written from attribute 241, unit unconfirmed for this model")
+    if devstat.get("Logical Sectors Read") is not None:
+        d["read"] = devstat["Logical Sectors Read"] * lbs
 
     if d["kind"] != "HDD":
         if devstat.get("Percentage Used Endurance Indicator") is not None:
@@ -341,144 +378,218 @@ def parse_ata(d, j):
                     d["used_pct"] = 100 - a["value"]
                     break
 
-    for aid, label, level in (
-        (5, "reallocated sectors", "WARN"),
-        (197, "pending sectors", "WARN"),
-        (198, "offline uncorrectable sectors", "WARN"),
-        (187, "reported uncorrectable errors", "WARN"),
-        (199, "UDMA CRC errors (cable/connector)", "WARN"),
-    ):
-        v = raw(aid)
-        if v:
-            d["issues"].append(f"{level}: {label} = {v}")
+    d.update(realloc=raw(5), pending=raw(197), offline_unc=raw(198),
+             reported_unc=raw(187), crc=raw(199))
+    log = j.get("ata_smart_error_log", {})
+    d["err_log"] = (log.get("extended") or log.get("summary") or {}).get("count")
     if d["kind"] == "HDD":
         d["start_stop"] = raw(4)
         d["load_cycles"] = raw(193)
 
 
 # --------------------------------------------------------------------------
-# History and wear rate
+# Analysis
 # --------------------------------------------------------------------------
 
-def parse_history(text):
-    rows = []
-    for line in text.splitlines():
-        try:
-            rows.append(json.loads(line))
-        except ValueError:
-            pass
-    return rows
+def _ts(row):
+    return dt.datetime.fromisoformat(row["ts"])
 
 
-def load_history(path):
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        return parse_history(f.read())
+def trend(d, past, key, now, window_days, min_span):
+    """Least-squares slope of `key` per day over the last `window_days`,
+    current value included. Points before a counter reset (value going
+    down) are dropped. Returns (slope_per_day, span_days) or None."""
+    pts = []
+    for h in past:
+        age = (now - _ts(h)).total_seconds() / 86400
+        if 0 < age <= window_days and h.get(key) is not None:
+            pts.append((-age, h[key]))
+    if d.get(key) is None:
+        return None
+    pts.append((0.0, d[key]))
+    pts.sort()
+    start = 0
+    for i in range(1, len(pts)):
+        if pts[i][1] < pts[i - 1][1]:
+            start = i
+    pts = pts[start:]
+    if len(pts) < 2:
+        return None
+    span = pts[-1][0] - pts[0][0]
+    if span < min_span:
+        return None
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    sxx = sum((p[0] - mx) ** 2 for p in pts)
+    if sxx == 0:
+        return None
+    slope = sum((p[0] - mx) * (p[1] - my) for p in pts) / sxx
+    return max(slope, 0.0), span
 
 
-def history_lines(disks, now):
-    """One JSONL line per disk with a serial (sleeping/SD disks have none)."""
-    out = []
-    for d in disks:
-        if not d.get("serial"):
-            continue
-        out.append(json.dumps({
-            "ts": now.isoformat(timespec="seconds"), "host": d["host"],
-            "serial": d["serial"], "model": d.get("model"), "kind": d["kind"],
-            "written": d.get("written"), "used_pct": d.get("used_pct"),
-            "poh": d.get("poh"), "temp": d.get("temp"),
-        }) + "\n")
-    return out
+def _rate(d, past, key, now):
+    """Higher of the 30- and 90-day rates (pessimistic: a recent burst of
+    writes counts). Returns (per_day, span_days, label) or None."""
+    candidates = []
+    r90 = trend(d, past, key, now, 90, MIN_HISTORY_DAYS)
+    if r90:
+        candidates.append((r90[0], r90[1], f"{r90[1]:.0f}-day history"))
+    r30 = trend(d, past, key, now, 30, MIN_30D_SPAN_DAYS)
+    if r30:
+        candidates.append((r30[0], r30[1], f"last {r30[1]:.0f} days"))
+    return max(candidates) if candidates else None
 
 
-def save_history(path, disks, now):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a") as f:
-        f.writelines(history_lines(disks, now))
-
-
-def add_rates(d, history, now, tbw_table):
-    """Fill gb_per_day, years_left and the source of each estimate."""
-    serial = d.get("serial")
-    if not serial or d["kind"] in ("HDD", "SD"):
+def analyse(d, past, now, specs):
+    """Fill wear, rates and projections for one disk. `past` = this disk's
+    earlier readings, oldest first."""
+    if not d.get("serial") or d["kind"] == "SD":
         return
-    past = [h for h in history if h.get("serial") == serial and h.get("written") is not None]
-    base = None
-    for h in sorted(past, key=lambda h: h["ts"]):
-        days = (now - dt.datetime.fromisoformat(h["ts"])).total_seconds() / 86400
-        if days >= MIN_HISTORY_DAYS:
-            base = (h, days)
-            break  # oldest snapshot = longest baseline
+    past = [h for h in past if h.get("ts") and _ts(h) < now]
+    spec = spec_for(d.get("model"), specs)
 
-    written, used = d.get("written"), d.get("used_pct")
-    rate_src = None
-    if base and written is not None:
-        h, days = base
-        d["gb_per_day"] = max(0.0, (written - h["written"]) / 1e9 / days)
-        rate_src = f"from {days:.0f} days of history"
-        d["history_days"] = days
-        # "% used" moves in whole percent: one step over a short window looks
-        # like a huge rate, so only trust the trend over a longer baseline.
-        if (used is not None and h.get("used_pct") is not None
-                and used > h["used_pct"] and days >= MIN_PCT_TREND_DAYS):
-            d["pct_per_year"] = (used - h["used_pct"]) / days * 365
-    elif written is not None and (d.get("poh") or 0) >= MIN_LIFETIME_POH:
+    # Counter changes (used by classify()), compared with the oldest scan of
+    # the last COUNTER_WINDOW_DAYS, so a new error stays flagged for a week
+    # instead of disappearing at the next scan.
+    if past:
+        recent = [h for h in past if (now - _ts(h)).days < COUNTER_WINDOW_DAYS]
+        prev = recent[0] if recent else past[-1]
+        d["prev_ts"] = prev["ts"]
+        d["changes"] = {k: [prev[k], d[k]]
+                        for k, _ in MEDIA_COUNTERS + GROWTH_COUNTERS
+                        if d.get(k) is not None and prev.get(k) is not None and d[k] > prev[k]}
+
+    w = _rate(d, past, "written", now)
+    if w:
+        d["gb_per_day"], d["history_days"], d["rate_src"] = w[0] / 1e9, w[1], w[2]
+    elif d.get("written") is not None and (d.get("poh") or 0) >= MIN_LIFETIME_POH:
         # No history yet: lifetime average per power-on hour. Only a rough
         # hint: power-on hours undercount on hosts switched off part of the
-        # day, and on drives that stop the counter in low-power states
-        # (seen on NVMe: Micron 2200 with 296 h after months in service).
-        d["gb_per_day"] = written / 1e9 / (d["poh"] / 24)
-        rate_src = "lifetime average"
-    d["rate_src"] = rate_src
+        # day, and on drives that stop the counter in low-power states.
+        d["gb_per_day"] = d["written"] / 1e9 / (d["poh"] / 24)
+        d["rate_src"] = "lifetime average"
+    r = _rate(d, past, "read", now)
+    if r:
+        d["read_gb_per_day"] = r[0] / 1e9
 
-    estimates = []
-    if d.get("pct_per_year"):
-        estimates.append(((100 - used) / d["pct_per_year"], "%used trend"))
-    elif used and used >= 1 and (d.get("poh") or 0) >= MIN_LIFETIME_POH:
-        per_year = used / (d["poh"] / 24 / 365)
-        estimates.append(((100 - used) / per_year, "%used lifetime"))
-    tbw = rated_tbw(d.get("model"), tbw_table)
-    if tbw:
+    if d["kind"] == "HDD":
+        _analyse_hdd(d, past, now, spec)
+    else:
+        _analyse_ssd(d, past, now, spec)
+
+
+def _analyse_ssd(d, past, now, spec):
+    written, used = d.get("written"), d.get("used_pct")
+    tbw = spec.get("tbw")
+    wear = []
+    if tbw and written is not None:
         d["tbw"] = tbw
-        if written is not None:
-            d["tbw_pct"] = written / 1e12 / tbw * 100
-            if d.get("gb_per_day"):
-                years = (tbw * 1e12 - written) / (d["gb_per_day"] * 1e9) / 365
-                src = "TBW, lifetime rate" if rate_src == "lifetime average" else "TBW"
-                estimates.append((max(years, 0), src))
-    if estimates:
-        d["years_left"], d["years_src"] = min(estimates)
-        # Only projections built on measured history may raise an alert;
-        # lifetime averages are shown as "~" estimates.
-        d["years_confident"] = "lifetime" not in d["years_src"]
+        d["tbw_pct"] = written / 1e12 / tbw * 100
+        d["tbw_left_tb"] = max(tbw - written / 1e12, 0.0)
+        wear.append((d["tbw_pct"], "TBW"))
+    if used is not None:
+        wear.append((float(used), "drive's own counter"))
+    if wear:
+        d["wear_pct"], d["wear_src"] = max(wear)
+
+    pct = trend(d, past, "used_pct", now, 365, MIN_PCT_TREND_DAYS)
+    if pct and pct[0] > 0:
+        d["pct_per_year"] = pct[0] * 365
+
+    lifetime_rate = d.get("rate_src") == "lifetime average"
+    confident, rough = [], []
+    if tbw and written is not None and d.get("gb_per_day"):
+        years = max((tbw * 1e12 - written) / (d["gb_per_day"] * 1e9) / 365, 0)
+        (rough if lifetime_rate else confident).append((years, "TBW at current write rate"))
+    if d.get("pct_per_year"):
+        confident.append(((100 - used) / d["pct_per_year"], "% used trend"))
+    elif used and used >= 1 and (d.get("poh") or 0) >= MIN_LIFETIME_POH:
+        rough.append(((100 - used) / (used / (d["poh"] / 24 / 365)), "% used, lifetime average"))
+    _set_projection(d, confident, rough)
+
+
+def _analyse_hdd(d, past, now, spec):
+    lc, lc_rating = d.get("load_cycles"), spec.get("load_cycles")
+    if lc is not None and lc_rating:
+        d["load_cycles_rating"] = lc_rating
+        d["wear_pct"], d["wear_src"] = lc / lc_rating * 100, "load cycles"
+    ss = _rate(d, past, "start_stop", now)
+    if ss:
+        d["starts_per_day"] = ss[0]
+    lcr = _rate(d, past, "load_cycles", now)
+    if lcr:
+        d["load_cycles_per_day"] = lcr[0]
+    if d.get("gb_per_day") is not None and d.get("rate_src") != "lifetime average":
+        d["workload_tb_year"] = (d["gb_per_day"] + d.get("read_gb_per_day", 0)) * 365 / 1000
+        if spec.get("workload"):
+            d["workload_rating"] = spec["workload"]
+            d["workload_pct"] = d["workload_tb_year"] / spec["workload"] * 100
+    confident = []
+    if lc is not None and lc_rating and d.get("load_cycles_per_day"):
+        confident.append((max(lc_rating - lc, 0) / d["load_cycles_per_day"] / 365, "load cycle budget"))
+    _set_projection(d, confident, [])
+
+
+def _set_projection(d, confident, rough):
+    """Only projections built on measured history may raise an alert;
+    lifetime averages are shown as "~" estimates and used only when nothing
+    better exists."""
+    if confident:
+        d["years_left"], d["years_src"] = min(confident)
+        d["years_confident"] = True
+    elif rough:
+        d["years_left"], d["years_src"] = min(rough)
+        d["years_confident"] = False
 
 
 def classify(d):
     if d.get("level") in ("SKIP", "INFO"):
         return
     issues = d["issues"]
-    if d.get("used_pct") is not None:
-        if d["used_pct"] >= CRIT_USED_PCT:
-            issues.append(f"CRIT: wear {d['used_pct']}%")
-        elif d["used_pct"] >= WARN_USED_PCT:
-            issues.append(f"WARN: wear {d['used_pct']}%")
-    if d.get("tbw_pct", 0) >= WARN_TBW_PCT:
-        issues.append(f"WARN: {d['tbw_pct']:.0f}% of rated TBW ({d['tbw']:.0f} TB) written")
+    changes = d.get("changes", {})
+    since = f" since {d['prev_ts'][:10]}" if d.get("prev_ts") else ""
+
+    for key, label in MEDIA_COUNTERS:
+        v = d.get(key)
+        if key in changes:
+            issues.append(f"CRIT: {label} grew {changes[key][0]} -> {v}{since}")
+        elif v:
+            issues.append(f"WARN: {label} = {v}")
+    for key, label in GROWTH_COUNTERS:
+        v = d.get(key)
+        if key in changes:
+            issues.append(f"WARN: {label} grew {changes[key][0]} -> {v}{since}")
+        elif v:
+            note = "not grown recently" if d.get("prev_ts") else "no earlier scan to compare"
+            issues.append(f"{label} = {v} ({note})")
+
+    w = d.get("wear_pct")
+    if w is not None:
+        src = d.get("wear_src", "")
+        if w >= CRIT_WEAR_PCT:
+            issues.append(f"CRIT: wear {w:.0f}% ({src})")
+        elif w >= WARN_WEAR_PCT:
+            issues.append(f"WARN: wear {w:.0f}% ({src})")
+    if d.get("workload_pct", 0) > 100:
+        issues.append(f"WARN: workload {d['workload_tb_year']:.0f} TB/year, "
+                      f"above the rated {d['workload_rating']:.0f}")
+
     y = d.get("years_left")
-    if y is not None and not d.get("years_confident"):
-        if y < WARN_YEARS_LEFT:
-            issues.append(f"rough estimate only: ~{y:.1f} years ({d['years_src']}); "
-                          "alerts start once there is history")
-    elif y is not None:
+    if y is not None and d.get("years_confident"):
         if y < CRIT_YEARS_LEFT:
             issues.append(f"CRIT: projected life under a year ({y:.1f}, {d['years_src']})")
         elif y < WARN_YEARS_LEFT:
             issues.append(f"WARN: projected life {y:.1f} years ({d['years_src']})")
+    elif y is not None and y < WARN_YEARS_LEFT:
+        issues.append(f"rough estimate only: ~{y:.1f} years ({d['years_src']}); "
+                      "alerts start once there is history")
+
     t = d.get("temp")
     limit = WARN_TEMP_HDD if d["kind"] == "HDD" else WARN_TEMP_SSD
     if t is not None and t >= limit:
         issues.append(f"WARN: temperature {t}°C (limit {limit}°C)")
+
     if any(i.startswith("CRIT") for i in issues):
         d["level"] = "CRIT"
     elif any(i.startswith("WARN") for i in issues):
@@ -491,18 +602,22 @@ def classify(d):
 # Output
 # --------------------------------------------------------------------------
 
-def fmt_bytes(n, unit_tb=False):
+def fmt_bytes(n):
     if n is None:
         return "-"
-    if unit_tb or n >= 1e12:
-        return f"{n / 1e12:.2f} TB"
-    return f"{n / 1e9:.0f} GB"
+    return f"{n / 1e12:.2f} TB" if n >= 1e12 else f"{n / 1e9:.0f} GB"
 
 
 def fmt_size(n):
     if not n:
         return "-"
     return f"{n / 1e12:.1f}T" if n >= 1e12 else f"{n / 1e9:.0f}G"
+
+
+def fmt_pct(p):
+    if p is None:
+        return "-"
+    return f"{p:.0f}%" if p >= 10 else f"{p:.1f}%"
 
 
 def fmt_years(d):
@@ -514,24 +629,24 @@ def fmt_years(d):
 
 
 def print_table(disks):
-    cols = [("HOST", 12), ("DEVICE", 12), ("MODEL", 26), ("TYPE", 4), ("SIZE", 5),
-            ("HOURS", 6), ("WRITTEN", 9), ("WEAR", 5), ("TEMP", 4),
+    cols = [("HOST", 11), ("DEVICE", 12), ("MODEL", 26), ("TYPE", 4), ("SIZE", 5),
+            ("HOURS", 6), ("WRITTEN", 9), ("WEAR", 5), ("TBW LEFT", 9), ("TEMP", 4),
             ("GB/DAY", 7), ("LIFE LEFT", 9), ("STATUS", 6)]
     print("  ".join(n.ljust(w) for n, w in cols))
     print("  ".join("-" * w for _, w in cols))
     for d in disks:
-        used = d.get("used_pct")
+        rate = "-"
+        if d.get("gb_per_day") is not None:
+            rate = f"{d['gb_per_day']:.1f}" + ("*" if d.get("rate_src") == "lifetime average" else "")
         row = [
             d["host"], d["dev"], (d.get("model") or "?")[:26], d.get("kind", "?"),
             fmt_size(d.get("capacity")),
             str(d["poh"]) if d.get("poh") is not None else "-",
             fmt_bytes(d.get("written")),
-            f"{used}%" if used is not None else "-",
+            fmt_pct(d.get("wear_pct")),
+            f"{d['tbw_left_tb']:.1f} TB" if d.get("tbw_left_tb") is not None else "-",
             f"{d['temp']}°" if d.get("temp") is not None else "-",
-            f"{d['gb_per_day']:.1f}" + ("*" if d.get("rate_src") == "lifetime average" else "")
-            if d.get("gb_per_day") is not None else "-",
-            fmt_years(d),
-            d.get("level", "?"),
+            rate, fmt_years(d), d.get("level", "?"),
         ]
         cells = [str(v).ljust(w) for v, (_, w) in zip(row, cols)]
         cells[-1] = paint(cells[-1], d.get("level"))
@@ -539,25 +654,42 @@ def print_table(disks):
         print(paint(line, "DIM") if d.get("level") in ("SKIP", "INFO") else line)
 
 
+def details(d):
+    """Secondary facts for one disk, as short strings."""
+    out = []
+    if d.get("tbw"):
+        out.append(f"{fmt_pct(d.get('tbw_pct'))} of rated {d['tbw']:.0f} TBW")
+    if d.get("used_pct") is not None and d["kind"] != "HDD":
+        out.append(f"drive's own counter {d['used_pct']}%")
+    if d.get("pct_per_year"):
+        out.append(f"+{d['pct_per_year']:.1f}%/year")
+    if d.get("load_cycles") is not None:
+        rating = f" of {d['load_cycles_rating']:.0f}" if d.get("load_cycles_rating") else ""
+        out.append(f"load cycles {d['load_cycles']}{rating}")
+    if d.get("start_stop") is not None:
+        per = f" ({d['starts_per_day']:.1f}/day)" if d.get("starts_per_day") is not None else ""
+        out.append(f"start/stop {d['start_stop']}{per}")
+    if d.get("workload_tb_year") is not None:
+        rating = f" of {d['workload_rating']:.0f}" if d.get("workload_rating") else ""
+        out.append(f"workload {d['workload_tb_year']:.1f} TB/year{rating}")
+    if d.get("read") is not None:
+        out.append(f"read {fmt_bytes(d['read'])}")
+    if d.get("unsafe_shutdowns"):
+        out.append(f"unsafe shutdowns {d['unsafe_shutdowns']}")
+    if d.get("rate_src") and d["rate_src"] != "lifetime average":
+        out.append(f"rate from {d['rate_src']}")
+    if d.get("years_src"):
+        out.append(f"projection: {d['years_src']}")
+    return out
+
+
 def print_notes(disks, host_errors):
     lines = []
     for d in disks:
-        extra = []
-        if d.get("tbw"):
-            extra.append(f"{d.get('tbw_pct', 0):.1f}% of rated {d['tbw']:.0f} TBW")
-        if d.get("unsafe_shutdowns"):
-            extra.append(f"unsafe shutdowns: {d['unsafe_shutdowns']}")
-        if d["kind"] == "HDD" and d.get("load_cycles") is not None:
-            extra.append(f"start/stop {d.get('start_stop')}, load cycles {d['load_cycles']}")
-        if d.get("years_src"):
-            extra.append(f"projection from: {d['years_src']}")
-        if d.get("rate_src") and d.get("rate_src") != "lifetime average":
-            extra.append(f"rate {d['rate_src']}")
+        extra = details(d)
         if d["issues"] or extra:
-            head = f"{d['host']} {d['dev']} {d.get('model', '')}".strip()
-            lines.append(paint(head, d.get("level")))
-            for i in d["issues"]:
-                lines.append(f"    - {i}")
+            lines.append(paint(f"{d['host']} {d['dev']} {d.get('model', '')}".strip(), d.get("level")))
+            lines += [f"    - {i}" for i in d["issues"]]
             if extra:
                 lines.append("      " + "; ".join(extra))
     for h, e in host_errors:
@@ -566,66 +698,155 @@ def print_notes(disks, host_errors):
         print("\nNotes:")
         print("\n".join(lines))
     if any(d.get("rate_src") == "lifetime average" for d in disks):
-        print("\n* GB/DAY with an asterisk = lifetime average per power-on day "
-              "(no history yet). The real trend appears from the second run, at least a day later.")
+        print("\n* GB/DAY with an asterisk, LIFE LEFT with ~ = lifetime average (no history yet); "
+              "never raises an alert. Real trends start from a scan at least a day after the first.")
 
 
-def print_history(history, serial_filter=None):
+def print_history(rows, serial_filter=None):
     by_serial = {}
-    for h in history:
+    for h in rows:
         by_serial.setdefault(h["serial"], []).append(h)
-    for serial, rows in sorted(by_serial.items(), key=lambda kv: (kv[1][-1].get("host", ""), kv[0])):
+    for serial, rs in sorted(by_serial.items(), key=lambda kv: (kv[1][-1].get("host") or "", kv[0])):
         if serial_filter and serial_filter not in serial:
             continue
-        last = rows[-1]
+        last = rs[-1]
         print(f"\n{last.get('host', '?')}  {last.get('model')}  ({last.get('kind', '?')}, s/n …{serial[-4:]})")
-        for r in rows:
-            w = fmt_bytes(r.get("written"))
+        for r in rs:
             u = f"{r['used_pct']}%" if r.get("used_pct") is not None else "-"
-            print(f"  {r['ts'][:16]}  written {w:>9}  wear {u:>4}  hours {r.get('poh')}")
+            print(f"  {r['ts'][:16]}  written {fmt_bytes(r.get('written')):>9}  "
+                  f"wear {u:>4}  hours {r.get('poh')}")
+
+
+# --------------------------------------------------------------------------
+# Dashboard API client
+# --------------------------------------------------------------------------
+
+def _auth_header(url):
+    user = os.environ.get("SMART_DASHBOARD_USER")
+    pw = os.environ.get("SMART_DASHBOARD_PASSWORD")
+    if not user:
+        host = urllib.parse.urlparse(url).hostname
+        try:
+            found = netrc.netrc().authenticators(host)
+        except (FileNotFoundError, netrc.NetrcParseError):
+            found = None
+        if found:
+            user, _, pw = found
+    if not user:
+        return {}
+    token = base64.b64encode(f"{user}:{pw or ''}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
+def api(url, path, method="GET"):
+    req = urllib.request.Request(url.rstrip("/") + path, method=method, headers=_auth_header(url))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            sys.exit(f"{url}: 401 Unauthorized. Put the dashboard login in ~/.netrc "
+                     f"(machine {urllib.parse.urlparse(url).hostname} login USER password PASS, chmod 600) "
+                     "or SMART_DASHBOARD_USER/SMART_DASHBOARD_PASSWORD. See README.")
+        sys.exit(f"{url}{path}: HTTP {e.code}")
+    except urllib.error.URLError as e:
+        sys.exit(f"{url}: unreachable ({e.reason}). Use --local to scan directly.")
+
+
+def dashboard_report(url, scan):
+    if scan:
+        r = api(url, "/api/smart/scan", "POST")
+        if not r.get("ok") and "already" not in r.get("message", ""):
+            sys.exit(f"scan not started: {r}")
+        print("Scanning via dashboard…", file=sys.stderr)
+        while True:
+            state = api(url, "/api/smart")
+            if state["state"] != "running":
+                break
+            time.sleep(2)
+        if state["state"] == "error":
+            sys.exit(f"scan failed: {state.get('error')}")
+    else:
+        state = api(url, "/api/smart")
+    last = state.get("last")
+    if not last:
+        sys.exit("The dashboard has no scan yet.")
+    return last
 
 
 # --------------------------------------------------------------------------
 
+def local_store(path):
+    """Open the local SQLite history, importing the old JSONL file once."""
+    sys.path.insert(0, HERE)
+    import smart_store
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    conn = smart_store.connect(path)
+    if os.path.exists(OLD_JSONL) and path == DEFAULT_DB:
+        with open(OLD_JSONL) as f:
+            n = smart_store.import_jsonl(conn, f.read(), source="cli-jsonl")
+        os.rename(OLD_JSONL, OLD_JSONL + ".imported")
+        print(paint(f"Imported {n} readings from {OLD_JSONL}", "DIM"), file=sys.stderr)
+    return smart_store, conn
+
+
 def main():
     ap = argparse.ArgumentParser(description="SMART wear report for all homelab disks.")
-    ap.add_argument("--hosts", default=DEFAULT_HOSTS)
-    ap.add_argument("--endurance", default=DEFAULT_ENDURANCE)
-    ap.add_argument("--history-file", default=DEFAULT_HISTORY)
+    ap.add_argument("--local", action="store_true",
+                    help="scan over SSH from this machine instead of via the dashboard")
+    ap.add_argument("--dashboard", default=DEFAULT_DASHBOARD, help="dashboard URL")
+    ap.add_argument("--no-scan", action="store_true", help="dashboard mode: show the last scan only")
+    ap.add_argument("--hosts", default=DEFAULT_HOSTS, help="--local: hosts file")
+    ap.add_argument("--specs", default=DEFAULT_SPECS, help="--local: endurance/spec file")
+    ap.add_argument("--db", default=DEFAULT_DB, help="--local: SQLite history file")
     ap.add_argument("--only", action="append", metavar="HOST", help="only this host (repeatable)")
-    ap.add_argument("--no-save", action="store_true", help="do not record a snapshot")
-    ap.add_argument("--json", action="store_true", help="print normalized data as JSON")
+    ap.add_argument("--no-save", action="store_true", help="--local: do not record the scan")
+    ap.add_argument("--json", action="store_true", help="print analysed data as JSON")
     ap.add_argument("--history", nargs="?", const="", metavar="SERIAL",
-                    help="show recorded history (optionally for one serial) and exit")
+                    help="show recorded history (optionally one serial) and exit")
     args = ap.parse_args()
 
-    history = load_history(args.history_file)
     if args.history is not None:
-        if not history:
-            sys.exit(f"No history in {args.history_file} yet.")
-        print_history(history, args.history or None)
+        if args.local:
+            store, conn = local_store(args.db)
+            rows = store.history(conn)
+        else:
+            q = f"?serial={urllib.parse.quote(args.history)}" if args.history else ""
+            rows = api(args.dashboard, "/api/smart/history" + q)
+        if not rows:
+            sys.exit("No history yet.")
+        print_history(rows, args.history or None)
         return
 
-    hosts = read_hosts(args.hosts)
-    if args.only:
-        hosts = [h for h in hosts if h[0] in args.only]
-        if not hosts:
-            sys.exit("No matching host in " + args.hosts)
-    tbw_table = read_endurance(args.endurance)
-    now, disks, host_errors = run_report(hosts, history, tbw_table)
+    if args.local:
+        store, conn = local_store(args.db)
+        hosts = read_hosts(args.hosts)
+        if args.only:
+            hosts = [h for h in hosts if h[0] in args.only]
+            if not hosts:
+                sys.exit("No matching host in " + args.hosts)
+        started = time.time()
+        now, disks, host_errors = run_report(hosts, store.history(conn), read_specs(args.specs))
+        if not args.no_save:
+            store.add_scan(conn, now, disks, host_errors, source="cli",
+                           duration_s=round(time.time() - started, 1), hosts=len(hosts))
+        when, nhosts = now, len(hosts)
+    else:
+        last = dashboard_report(args.dashboard, scan=not args.no_scan)
+        disks, host_errors = last["disks"], [tuple(e) for e in last["host_errors"]]
+        if args.only:
+            disks = [d for d in disks if d["host"] in args.only]
+            host_errors = [e for e in host_errors if e[0] in args.only]
+        when, nhosts = dt.datetime.fromisoformat(last["time"]).astimezone(), last.get("hosts")
 
     if args.json:
-        print(json.dumps({"time": now.isoformat(timespec="seconds"), "disks": disks,
+        print(json.dumps({"time": when.isoformat(timespec="seconds"), "disks": disks,
                           "host_errors": host_errors}, indent=2, ensure_ascii=False))
     else:
-        print(f"SMART report  {now:%Y-%m-%d %H:%M}  ({len(disks)} disks, {len(hosts)} hosts)\n")
+        src = "local SSH" if args.local else args.dashboard
+        print(f"SMART report  {when:%Y-%m-%d %H:%M}  ({len(disks)} disks, {nhosts} hosts, via {src})\n")
         print_table(disks)
         print_notes(disks, host_errors)
-
-    if not args.no_save:
-        save_history(args.history_file, disks, now)
-        if not args.json:
-            print(paint(f"\nSnapshot saved: {args.history_file}", "DIM"))
 
     levels = {d.get("level") for d in disks}
     sys.exit(2 if "CRIT" in levels else 1 if ("WARN" in levels or host_errors) else 0)
