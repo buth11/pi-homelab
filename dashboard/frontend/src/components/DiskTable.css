@@ -33,3 +33,4 @@
 .disk-banner-error { background: rgba(248,81,73,.12); color: var(--red); }
 .disk-banner-warn  { background: rgba(210,153,34,.12); color: var(--yellow); display: flex; flex-direction: column; gap: 2px; }
 .disk-footnote { padding: 0 16px 14px; font-size: 12px; }
+.disk-backup-warn { color: var(--yellow); }

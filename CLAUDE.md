@@ -101,7 +101,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 - **Vaultwarden**: namespace vaultwarden, self-hosted password manager, Traefik Ingress at vault.home.local + vault.analitykbiznesowy.pl (real Let's Encrypt cert via Hostido AutoSSL, split-DNS only via Pi-hole + Tailscale — see setup/07-vaultwarden-tls-hostido.md)
 - **Linkding**: namespace linkding, self-hosted bookmark manager synced across browsers via the official browser extension, Traefik Ingress at links.home.local + links.analitykbiznesowy.pl (same split-DNS pattern as Vaultwarden; currently mkcert, real cert pending — see setup/08-linkding-bookmarks.md)
 - **arr-stack** (Prowlarr/Sonarr/Radarr): namespace arr, on g3-worker3, GitOps-managed via ArgoCD
-- **Homelab Dashboard**: namespace dashboard, cluster control/WoL UI — authentication at the nginx frontend (`dashboard-auth` Secret, see k8s/dashboard/auth-secret.yaml)
+- **Homelab Dashboard**: namespace dashboard, cluster control/WoL UI — authentication at the nginx frontend (`dashboard-auth` Secret, see k8s/dashboard/auth-secret.yaml); backend pinned to pi4-master (hostNetwork). Disks tab = SMART wear report with SQLite history on the `smart-data` local-path PVC, backed up to MinIO bucket `smart-report` (see smart-report/README.md)
 - **File Browser**: namespace filebrowser, NAS file browser
 - **MinIO**: namespace minio, S3-compatible storage (also serves as the Terraform state backend)
 - **Uptime Kuma**: namespace uptime-kuma, status monitoring
@@ -158,8 +158,8 @@ kubectl get application -n argocd    # what's under GitOps
 # qBittorrent password
 kubectl logs -n qbittorrent $(kubectl get pods -n qbittorrent -o name | head -1) -c qbittorrent | grep -i password
 
-# Disk wear / SMART report, all hosts (see smart-report/README.md)
-./smart-report/smart_report.py
+# Disk wear / SMART report via the dashboard (see smart-report/README.md)
+./smart-report/smart_report.py            # --local: SSH from here instead
 
 # Shutdown G3
 ssh buth11@192.168.50.13 "sudo shutdown -h now"

@@ -5,6 +5,10 @@ metadata:
   namespace: dashboard
 spec:
   replicas: 1
+  # Recreate: the SQLite history (smart-data PVC) must never have two
+  # writers, and a RWO local-path volume cannot be shared anyway.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: dashboard-backend
@@ -16,16 +20,16 @@ spec:
       serviceAccountName: dashboard-backend
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      # Pin to pi4-master — must NOT run on g3-worker3 which this pod shuts down
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: NotIn
-                values:
-                - g3-worker3
+      # Pinned to pi4-master (2026-11-27):
+      # - never g3-worker3, which this pod shuts down;
+      # - the SMART history is SQLite on a local-path PVC (smart-data), and
+      #   local-path volumes are node-bound (CLAUDE.md: always pair with a
+      #   nodeSelector);
+      # - the backend needs the API server, which runs on pi4-master, so
+      #   pinning costs no availability;
+      # - pve-firewall allows SSH to Proxmox from 192.168.50.10 only.
+      nodeSelector:
+        kubernetes.io/hostname: pi4-master
       containers:
       - name: backend
         image: ghcr.io/buth11/pi-homelab/dashboard-backend:latest
@@ -53,10 +57,31 @@ spec:
             configMapKeyRef:
               name: dashboard-config
               key: G3_NODE_NAME
+        - name: SMART_DB
+          value: /data/smart.db
+        - name: MINIO_ENDPOINT
+          value: http://minio.minio.svc.cluster.local:9000
+        # Backup credentials for the smart-report bucket (MinIO user with a
+        # bucket-scoped policy, see smart-report/README.md). optional: the
+        # backend runs without them and shows "MinIO not configured".
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: smart-backup-minio
+              key: access-key
+              optional: true
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: smart-backup-minio
+              key: secret-key
+              optional: true
         volumeMounts:
         - name: ssh-key
           mountPath: /root/.ssh
           readOnly: true
+        - name: smart-data
+          mountPath: /data
         resources:
           requests:
             cpu: 50m
@@ -75,3 +100,6 @@ spec:
         secret:
           secretName: dashboard-ssh-key
           defaultMode: 0400
+      - name: smart-data
+        persistentVolumeClaim:
+          claimName: smart-data

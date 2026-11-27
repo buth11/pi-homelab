@@ -38,14 +38,19 @@ function ago(iso) {
   return `${Math.round(s / 86400)} days ago`
 }
 
-function Wear({ pct }) {
+function fmtPct(p) {
+  if (p == null) return '—'
+  return p >= 10 ? `${p.toFixed(0)}%` : `${p.toFixed(1)}%`
+}
+
+function Wear({ pct, src }) {
   if (pct == null) return <span className="text-dim">—</span>
   return (
-    <div className="progress-row">
+    <div className="progress-row" title={src ? `From ${src}` : undefined}>
       <div className="progress-bar disk-wear-bar">
         <div className="progress-fill" style={{ width: `${Math.min(pct, 100)}%`, background: wearColor(pct) }} />
       </div>
-      <span className="progress-label">{pct}%</span>
+      <span className="progress-label">{fmtPct(pct)}</span>
     </div>
   )
 }
@@ -85,11 +90,16 @@ function DiskDetails({ d }) {
   const facts = [
     d.serial && ['Serial', d.serial],
     d.firmware && ['Firmware', d.firmware],
-    d.tbw && ['Rated endurance', `${d.tbw} TBW (${(d.tbw_pct ?? 0).toFixed(1)}% used)`],
+    d.tbw && ['Rated endurance', `${d.tbw} TBW · ${fmtPct(d.tbw_pct)} written · ${d.tbw_left_tb?.toFixed(1)} TB left`],
+    d.kind !== 'HDD' && d.used_pct != null && ["Drive's own wear counter", `${d.used_pct}%${d.pct_per_year ? ` (+${d.pct_per_year.toFixed(1)}%/year)` : ''}`],
+    d.wear_src && ['Wear column uses', d.wear_src],
+    d.read != null && ['Read (lifetime)', fmtBytes(d.read)],
+    d.load_cycles != null && ['Load/unload cycles', `${d.load_cycles}${d.load_cycles_rating ? ` of ${d.load_cycles_rating.toLocaleString()}` : ''}${d.load_cycles_per_day != null ? ` · ${d.load_cycles_per_day.toFixed(1)}/day` : ''}`],
+    d.start_stop != null && ['Start/stop count', `${d.start_stop}${d.starts_per_day != null ? ` · ${d.starts_per_day.toFixed(1)}/day` : ''}`],
+    d.workload_tb_year != null && ['Workload (read + write)', `${d.workload_tb_year.toFixed(1)} TB/year${d.workload_rating ? ` of ${d.workload_rating} rated` : ''}`],
     d.unsafe_shutdowns != null && ['Unsafe shutdowns', d.unsafe_shutdowns],
-    d.kind === 'HDD' && d.load_cycles != null && ['Start/stop · load cycles', `${d.start_stop} · ${d.load_cycles}`],
-    d.rate_src && ['Rate source', d.rate_src],
-    d.years_src && ['Projection from', d.years_src],
+    d.rate_src && ['Write rate from', d.rate_src],
+    d.years_src && ['Projection from', `${d.years_src}${d.years_confident ? '' : ' (rough, no alerts)'}`],
   ].filter(Boolean)
   return (
     <div className="disk-details">
@@ -175,13 +185,14 @@ export default function DiskTable() {
           <thead>
             <tr>
               <th>Host</th><th>Device</th><th>Model</th><th>Type</th><th>Size</th>
-              <th>Hours</th><th>Written</th><th>Wear</th><th>Temp</th>
+              <th>Hours</th><th>Written</th><th title="Higher of: % of rated TBW and the drive's own counter (HDD: load cycles)">Wear</th>
+              <th title="Rated TBW minus bytes written">TBW left</th><th>Temp</th>
               <th title="Write rate per day">GB/day</th><th>Life left</th><th>Status</th>
             </tr>
           </thead>
           <tbody>
             {!last ? (
-              <tr><td colSpan={12} className="empty-row">
+              <tr><td colSpan={13} className="empty-row">
                 {running ? 'First scan in progress…' : 'No scan yet. Click “Scan now”.'}
               </td></tr>
             ) : disks.map(d => {
@@ -198,7 +209,8 @@ export default function DiskTable() {
                     <td className="mono">{fmtSize(d.capacity)}</td>
                     <td className="mono">{d.poh ?? '—'}</td>
                     <td className="mono">{fmtBytes(d.written)}</td>
-                    <td><Wear pct={d.used_pct} /></td>
+                    <td><Wear pct={d.wear_pct} src={d.wear_src} /></td>
+                    <td className="mono">{d.tbw_left_tb == null ? '—' : `${d.tbw_left_tb.toFixed(1)} TB`}</td>
                     <td className="mono">{d.temp == null ? '—' : `${d.temp}°C`}</td>
                     <td className="mono">
                       {d.gb_per_day == null ? '—' : d.gb_per_day.toFixed(1)}
@@ -208,7 +220,7 @@ export default function DiskTable() {
                     <td><span className={`badge ${LEVEL_BADGE[d.level] ?? 'badge-gray'}`}>{d.level}</span></td>
                   </tr>
                   {open === key && (
-                    <tr className="disk-details-row"><td colSpan={12}><DiskDetails d={d} /></td></tr>
+                    <tr className="disk-details-row"><td colSpan={13}><DiskDetails d={d} /></td></tr>
                   )}
                 </Fragment>
               )
@@ -222,9 +234,16 @@ export default function DiskTable() {
           {last.host_errors.map(([h, e], i) => <div key={i}><strong>{h}</strong>: {e}</div>)}
         </div>
       )}
+      {data?.backup && (
+        <div className={`disk-footnote ${data.backup.ok ? 'text-dim' : 'disk-backup-warn'}`}>
+          {data.backup.ok
+            ? `History backed up to MinIO ${ago(data.backup.at)}.`
+            : `MinIO backup failed (${data.backup.error})${data.backup.last_ok ? `; last good copy ${ago(data.backup.last_ok)}` : ''}. Retried on the next scan.`}
+        </div>
+      )}
       {anyLifetimeAvg && (
         <div className="disk-footnote text-dim">
-          * Lifetime average per power-on day; no history yet. The real trend shows from a scan at least a day after the first one.
+          * / ~ = lifetime average, no history yet; never raises an alert. Real trends start from a scan at least a day after the first.
           Click a row for details and history.
         </div>
       )}
