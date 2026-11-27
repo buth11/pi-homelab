@@ -159,7 +159,7 @@ kubectl get application -n argocd    # what's under GitOps
 kubectl logs -n qbittorrent $(kubectl get pods -n qbittorrent -o name | head -1) -c qbittorrent | grep -i password
 
 # Disk wear / SMART report, all hosts (see smart-report/README.md)
-./smart-report/smart-report.py
+./smart-report/smart_report.py
 
 # Shutdown G3
 ssh buth11@192.168.50.13 "sudo shutdown -h now"

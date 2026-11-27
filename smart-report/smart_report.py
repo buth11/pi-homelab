@@ -12,11 +12,11 @@ which keeps truenas/hdd-idle working.
 
 Only the Python standard library is used. Usage:
 
-    ./smart-report.py                # all hosts, save snapshot
-    ./smart-report.py --only g3-worker3
-    ./smart-report.py --no-save      # look without recording history
-    ./smart-report.py --json         # normalized data as JSON
-    ./smart-report.py --history      # per-disk history, no SSH
+    ./smart_report.py                # all hosts, save snapshot
+    ./smart_report.py --only g3-worker3
+    ./smart_report.py --no-save      # look without recording history
+    ./smart_report.py --json         # normalized data as JSON
+    ./smart_report.py --history      # per-disk history, no SSH
 
 Full description: README.md in this directory.
 """
@@ -134,17 +134,48 @@ def rated_tbw(model, table):
 # Collection
 # --------------------------------------------------------------------------
 
-def collect_host(name, target):
+def ssh_cli_runner(target, script):
+    """Default transport: the system ssh client. Returns (stdout, error)."""
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", target, "bash -s"]
     try:
-        p = subprocess.run(cmd, input=REMOTE_SCRIPT, capture_output=True,
+        p = subprocess.run(cmd, input=script, capture_output=True,
                            text=True, timeout=SSH_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return {"host": name, "error": f"SSH timeout after {SSH_TIMEOUT}s"}
-    if "@@HOST" not in p.stdout:
-        err = (p.stderr.strip().splitlines() or ["no output"])[-1]
-        return {"host": name, "error": f"SSH failed: {err}"}
-    return parse_remote(name, p.stdout)
+        return "", f"SSH timeout after {SSH_TIMEOUT}s"
+    err = (p.stderr.strip().splitlines() or ["no output"])[-1]
+    return p.stdout, err
+
+
+def collect_host(name, target, runner=ssh_cli_runner):
+    """runner(target, script) -> (stdout, error_text). The dashboard backend
+    passes a paramiko-based runner; the CLI uses the system ssh."""
+    try:
+        out, err = runner(target, REMOTE_SCRIPT)
+    except Exception as exc:  # a runner bug or network error must not kill the whole report
+        return {"host": name, "error": f"SSH failed: {exc}"}
+    if "@@HOST" not in out:
+        return {"host": name, "error": f"SSH failed: {err or 'no output'}"}
+    return parse_remote(name, out)
+
+
+def run_report(hosts, history, tbw_table, runner=ssh_cli_runner, now=None):
+    """Collect from all hosts in parallel and analyse.
+    Returns (now, disks, host_errors)."""
+    now = now or dt.datetime.now(dt.timezone.utc).astimezone()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(hosts), 1)) as ex:
+        results = list(ex.map(lambda h: collect_host(h[0], h[1], runner), hosts))
+    disks, host_errors = [], []
+    for r in results:
+        if "error" in r:
+            host_errors.append((r["host"], r["error"]))
+            continue
+        for n in r["notes"]:
+            host_errors.append((r["host"], n))
+        disks.extend(r["disks"])
+    for d in disks:
+        add_rates(d, history, now, tbw_table)
+        classify(d)
+    return now, disks, host_errors
 
 
 def parse_remote(name, out):
@@ -317,30 +348,42 @@ def parse_ata(d, j):
 # History and wear rate
 # --------------------------------------------------------------------------
 
-def load_history(path):
+def parse_history(text):
     rows = []
-    if os.path.exists(path):
-        with open(path) as f:
-            for line in f:
-                try:
-                    rows.append(json.loads(line))
-                except ValueError:
-                    pass
+    for line in text.splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass
     return rows
+
+
+def load_history(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return parse_history(f.read())
+
+
+def history_lines(disks, now):
+    """One JSONL line per disk with a serial (sleeping/SD disks have none)."""
+    out = []
+    for d in disks:
+        if not d.get("serial"):
+            continue
+        out.append(json.dumps({
+            "ts": now.isoformat(timespec="seconds"), "host": d["host"],
+            "serial": d["serial"], "model": d.get("model"), "kind": d["kind"],
+            "written": d.get("written"), "used_pct": d.get("used_pct"),
+            "poh": d.get("poh"), "temp": d.get("temp"),
+        }) + "\n")
+    return out
 
 
 def save_history(path, disks, now):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a") as f:
-        for d in disks:
-            if not d.get("serial"):
-                continue
-            f.write(json.dumps({
-                "ts": now.isoformat(timespec="seconds"), "host": d["host"],
-                "serial": d["serial"], "model": d.get("model"), "kind": d["kind"],
-                "written": d.get("written"), "used_pct": d.get("used_pct"),
-                "poh": d.get("poh"), "temp": d.get("temp"),
-            }) + "\n")
+        f.writelines(history_lines(disks, now))
 
 
 def add_rates(d, history, now, tbw_table):
@@ -546,23 +589,7 @@ def main():
         if not hosts:
             sys.exit("No matching host in " + args.hosts)
     tbw_table = read_endurance(args.endurance)
-    now = dt.datetime.now(dt.timezone.utc).astimezone()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as ex:
-        results = list(ex.map(lambda h: collect_host(*h), hosts))
-
-    disks, host_errors = [], []
-    for r in results:
-        if "error" in r:
-            host_errors.append((r["host"], r["error"]))
-            continue
-        for n in r["notes"]:
-            host_errors.append((r["host"], n))
-        disks.extend(r["disks"])
-
-    for d in disks:
-        add_rates(d, history, now, tbw_table)
-        classify(d)
+    now, disks, host_errors = run_report(hosts, history, tbw_table)
 
     if args.json:
         print(json.dumps({"time": now.isoformat(timespec="seconds"), "disks": disks,
