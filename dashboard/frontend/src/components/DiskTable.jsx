@@ -20,9 +20,10 @@ function fmtSize(n) {
   if (!n) return '—'
   return n >= 1e12 ? `${(n / 1e12).toFixed(1)} TB` : `${(n / 1e9).toFixed(0)} GB`
 }
-function fmtYears(y) {
+function fmtYears(y, confident) {
   if (y == null) return '—'
-  return y > 50 ? '> 50 y' : `${y.toFixed(1)} y`
+  const txt = y > 50 ? '> 50 y' : `${y.toFixed(1)} y`
+  return confident ? txt : `~${txt}`  // ~ = from lifetime average, no alert yet
 }
 function wearColor(pct) {
   if (pct >= 90) return 'var(--red)'
@@ -203,7 +204,7 @@ export default function DiskTable() {
                       {d.gb_per_day == null ? '—' : d.gb_per_day.toFixed(1)}
                       {d.rate_src === 'lifetime average' && <span className="text-dim" title="Lifetime average per power-on day (no history yet)">*</span>}
                     </td>
-                    <td className="mono">{fmtYears(d.years_left)}</td>
+                    <td className="mono" title={d.years_src ? `Projection from: ${d.years_src}` : undefined}>{fmtYears(d.years_left, d.years_confident)}</td>
                     <td><span className={`badge ${LEVEL_BADGE[d.level] ?? 'badge-gray'}`}>{d.level}</span></td>
                   </tr>
                   {open === key && (

@@ -48,6 +48,7 @@ WARN_TEMP_HDD = 50
 WARN_TBW_PCT = 80
 MIN_HISTORY_DAYS = 0.8  # shorter gaps give a noisy rate
 MIN_PCT_TREND_DAYS = 60  # see add_rates()
+MIN_LIFETIME_POH = 720  # hours; below this a lifetime average is noise
 
 # Runs on the remote host via `bash -s`. Prints marker lines that
 # parse_remote() splits on; smartctl JSON goes between them unchanged.
@@ -307,12 +308,23 @@ def parse_ata(d, j):
             devstat[row.get("name")] = row.get("value")
     lbs = j.get("logical_block_size") or 512
 
+    # Power-on hours: smartctl prefers the Device Statistics value, which
+    # some firmware gets badly wrong (SanDisk X400: 135 h in devstat vs
+    # 8710 h in attribute 9; WD Blue WDS250G2B0A: 0 vs 21900). An
+    # undercount is the dangerous direction, because every per-hour rate is
+    # then inflated, so take the larger of the two.
+    if 9 in attrs and attrs[9].get("name") == "Power_On_Hours":
+        s = str(attrs[9]["raw"].get("string", "")).split("h")[0].split()[0]
+        if s.isdigit() and 0 < int(s) < 200_000:
+            d["poh"] = max(d.get("poh") or 0, int(s))
+
     # Bytes written: ATA Device Statistics are standardised (sectors),
     # attribute 241 is not (sectors, 32 MiB or GiB depending on vendor).
     if devstat.get("Logical Sectors Written") is not None:
         d["written"] = devstat["Logical Sectors Written"] * lbs
         d["written_src"] = "devstat"
-    elif raw(246) is not None and attrs[246].get("name") == "Total_Host_Sector_Write":
+    elif raw(246) is not None and attrs[246].get("name") in (
+            "Total_Host_Sector_Write", "Total_LBAs_Written"):  # Crucial/Micron (BX500: no devstat)
         d["written"] = raw(246) * lbs
         d["written_src"] = "attr246"
     elif raw(241) is not None:
@@ -411,9 +423,11 @@ def add_rates(d, history, now, tbw_table):
         if (used is not None and h.get("used_pct") is not None
                 and used > h["used_pct"] and days >= MIN_PCT_TREND_DAYS):
             d["pct_per_year"] = (used - h["used_pct"]) / days * 365
-    elif written is not None and d.get("poh"):
-        # No history yet: lifetime average per power-on day. Overstates
-        # the calendar rate on hosts that are switched off part of the day.
+    elif written is not None and (d.get("poh") or 0) >= MIN_LIFETIME_POH:
+        # No history yet: lifetime average per power-on hour. Only a rough
+        # hint: power-on hours undercount on hosts switched off part of the
+        # day, and on drives that stop the counter in low-power states
+        # (seen on NVMe: Micron 2200 with 296 h after months in service).
         d["gb_per_day"] = written / 1e9 / (d["poh"] / 24)
         rate_src = "lifetime average"
     d["rate_src"] = rate_src
@@ -421,7 +435,7 @@ def add_rates(d, history, now, tbw_table):
     estimates = []
     if d.get("pct_per_year"):
         estimates.append(((100 - used) / d["pct_per_year"], "%used trend"))
-    elif used and used >= 1 and d.get("poh"):
+    elif used and used >= 1 and (d.get("poh") or 0) >= MIN_LIFETIME_POH:
         per_year = used / (d["poh"] / 24 / 365)
         estimates.append(((100 - used) / per_year, "%used lifetime"))
     tbw = rated_tbw(d.get("model"), tbw_table)
@@ -431,9 +445,13 @@ def add_rates(d, history, now, tbw_table):
             d["tbw_pct"] = written / 1e12 / tbw * 100
             if d.get("gb_per_day"):
                 years = (tbw * 1e12 - written) / (d["gb_per_day"] * 1e9) / 365
-                estimates.append((max(years, 0), "TBW"))
+                src = "TBW, lifetime rate" if rate_src == "lifetime average" else "TBW"
+                estimates.append((max(years, 0), src))
     if estimates:
         d["years_left"], d["years_src"] = min(estimates)
+        # Only projections built on measured history may raise an alert;
+        # lifetime averages are shown as "~" estimates.
+        d["years_confident"] = "lifetime" not in d["years_src"]
 
 
 def classify(d):
@@ -448,7 +466,11 @@ def classify(d):
     if d.get("tbw_pct", 0) >= WARN_TBW_PCT:
         issues.append(f"WARN: {d['tbw_pct']:.0f}% of rated TBW ({d['tbw']:.0f} TB) written")
     y = d.get("years_left")
-    if y is not None:
+    if y is not None and not d.get("years_confident"):
+        if y < WARN_YEARS_LEFT:
+            issues.append(f"rough estimate only: ~{y:.1f} years ({d['years_src']}); "
+                          "alerts start once there is history")
+    elif y is not None:
         if y < CRIT_YEARS_LEFT:
             issues.append(f"CRIT: projected life under a year ({y:.1f}, {d['years_src']})")
         elif y < WARN_YEARS_LEFT:
@@ -487,7 +509,8 @@ def fmt_years(d):
     y = d.get("years_left")
     if y is None:
         return "-"
-    return ">50 y" if y > 50 else f"{y:.1f} y"
+    txt = ">50 y" if y > 50 else f"{y:.1f} y"
+    return txt if d.get("years_confident") else "~" + txt
 
 
 def print_table(disks):
