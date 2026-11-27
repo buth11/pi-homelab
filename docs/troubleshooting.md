@@ -788,3 +788,24 @@ short of memory, which matters on the 4 GB Raspberry Pi control plane.
 
 **Lesson:** size requests from `max_over_time(...[7d])` per container. A 6h
 dashboard window and per-pod sums both hide the real picture.
+
+## 2026-11-27 -- qBittorrent had been leaking the home IP for months (VPN "up", no traffic in it)
+
+**Symptom:** none. Found by asking whether torrents really went through the
+VPN. The pod's egress IP was the home IP (ISP address); the Proton IP is
+205.147.16.83. `wg show` looked healthy, with a recent handshake.
+
+**Root cause:** Gluetun was removed from the pod on 2026-05-31. From then on
+the VPN was host-level `wg-quick` on g3, which relies on two `ip rule`
+entries. Every time unattended-upgrades restarted systemd-networkd, networkd
+deleted those "foreign" rules (`ManageForeignRoutingPolicyRules=yes`), and
+there was no kill switch. The leak ran from 2026-07-29 to 2026-10-29 and
+again from 2026-11-04.
+
+**Fix:** Gluetun is back as a native sidecar, with its firewall as the kill
+switch and DNS going through it. qBittorrent is bound to `tun0`, and host
+wg-quick is disabled. A kill-switch test passed. Full postmortem:
+[postmortems/2026-11-27-qbittorrent-vpn-leak.md](postmortems/2026-11-27-qbittorrent-vpn-leak.md).
+
+**Lesson:** verify the egress IP from inside the workload. "Service active"
+and "handshake OK" prove nothing about where the traffic goes.

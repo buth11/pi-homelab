@@ -15,6 +15,78 @@ spec:
       labels:
         app: qbittorrent
     spec:
+      # ---------------------------------------------------------------------
+      # VPN kill switch (2026-11-27, see docs/postmortems/2026-11-27-qbittorrent-vpn-leak.md)
+      #
+      # Every packet of qBittorrent AND Firefox (same pod = same network
+      # namespace) must leave through ProtonVPN, never the home IP.
+      # - gluetun is a native sidecar (initContainer + restartPolicy: Always)
+      #   with a startupProbe: the app containers only start once the tunnel
+      #   is up and healthy, so there is no window without VPN.
+      # - gluetun's firewall drops all outbound traffic that is not inside
+      #   the tunnel (FIREWALL_OUTBOUND_SUBNETS deliberately unset). If the
+      #   tunnel dies, traffic stops; it does not fall back to the LAN uplink.
+      # - Inbound only for the WebUI (8080) and noVNC (3000/3001) from LAN.
+      # - DNS goes to gluetun's resolver (DNS over TLS through the tunnel),
+      #   not CoreDNS, so tracker lookups do not leak to the ISP either.
+      # - qBittorrent is also bound to tun0 in its own settings (defence in
+      #   depth: without the firewall it still cannot use eth0).
+      # Do NOT go back to the host-level wg-quick on g3: systemd-networkd
+      # silently drops its routing rules on every restart (unattended-upgrades),
+      # which is exactly how traffic leaked from 2026-07-29 and 2026-11-04.
+      # ---------------------------------------------------------------------
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+        - 127.0.0.1
+      initContainers:
+      - name: gluetun
+        image: qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+        restartPolicy: Always
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+        env:
+        - name: VPN_SERVICE_PROVIDER
+          value: "custom"
+        - name: VPN_TYPE
+          value: "wireguard"
+        - name: WIREGUARD_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: protonvpn-wireguard
+              key: private-key
+        # ProtonVPN NL P2P server (same peer as /etc/wireguard/proton.conf on g3)
+        - name: WIREGUARD_PUBLIC_KEY
+          value: "QfedBwVdaqDpaGL+8e/Wx9M8O/ZlM6vt/CSACCYfgDE="
+        - name: WIREGUARD_ADDRESSES
+          value: "10.2.0.2/32"
+        - name: VPN_ENDPOINT_IP
+          value: "169.150.196.65"
+        - name: VPN_ENDPOINT_PORT
+          value: "51820"
+        - name: FIREWALL_INPUT_PORTS
+          value: "8080,3000,3001"
+        - name: BLOCK_MALICIOUS
+          value: "off"
+        - name: TZ
+          value: "Europe/Warsaw"
+        startupProbe:
+          exec:
+            command: ["/gluetun-entrypoint", "healthcheck"]
+          periodSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          exec:
+            command: ["/gluetun-entrypoint", "healthcheck"]
+          periodSeconds: 30
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: 32Mi
+          limits:
+            memory: 256Mi
       containers:
       - name: qbittorrent
         image: lscr.io/linuxserver/qbittorrent:latest

@@ -1,5 +1,16 @@
 # Part 5: qBittorrent with ProtonVPN WireGuard via Gluetun
 
+> **Current state (2026-11-27):** Gluetun is back. It runs as a *native
+> sidecar*: an initContainer with `restartPolicy: Always` and a startupProbe,
+> so qBittorrent and Firefox only start once the tunnel is healthy. Its
+> firewall is the kill switch. Between 2026-05-31 and 2026-11-27, Gluetun was
+> replaced by host-level `wg-quick` on g3, and torrent traffic silently left
+> through the home IP for months. The live manifest is in
+> [k8s/qbittorrent/deployment.yaml](../k8s/qbittorrent/deployment.yaml).
+> Full story:
+> [docs/postmortems/2026-11-27-qbittorrent-vpn-leak.md](../docs/postmortems/2026-11-27-qbittorrent-vpn-leak.md).
+> The walkthrough below describes the original May setup.
+
 ## Goal
 
 Deploy qBittorrent on k3s cluster with all traffic routed through
