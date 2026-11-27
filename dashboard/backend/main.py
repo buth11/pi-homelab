@@ -35,6 +35,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Disks tab (SMART wear report), see smart.py
+from smart import router as smart_router  # noqa: E402
+app.include_router(smart_router)
+
 # ---------------------------------------------------------------------------
 # Kubernetes clients (initialised on first use via dependency-free globals)
 # ---------------------------------------------------------------------------

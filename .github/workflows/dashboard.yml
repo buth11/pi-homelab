@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'dashboard/**'
+      - 'smart-report/**'
       - '.github/workflows/dashboard.yml'
   workflow_dispatch:
 env:
@@ -28,6 +29,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ./dashboard/backend
+          build-contexts: |
+            smartreport=./smart-report
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

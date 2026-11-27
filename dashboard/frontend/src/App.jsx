@@ -4,9 +4,10 @@ import PodTable from './components/PodTable.jsx'
 import ServiceTable from './components/ServiceTable.jsx'
 import QuickActions from './components/QuickActions.jsx'
 import LogViewer from './components/LogViewer.jsx'
+import DiskTable from './components/DiskTable.jsx'
 import './App.css'
 
-const TABS = ['Nodes', 'Pods', 'Services', 'Actions', 'Logs']
+const TABS = ['Nodes', 'Pods', 'Services', 'Disks', 'Actions', 'Logs']
 const REFRESH_INTERVAL = 30_000
 
 export default function App() {
@@ -121,6 +122,7 @@ export default function App() {
             {tab === 'Nodes' && <NodeTable nodes={nodes} />}
             {tab === 'Pods' && <PodTable pods={pods} onViewLogs={handleViewLogs} onRefresh={fetchAll} />}
             {tab === 'Services' && <ServiceTable services={services} />}
+            {tab === 'Disks' && <DiskTable />}
             {tab === 'Actions' && <QuickActions pods={pods} onRefresh={fetchAll} />}
             {tab === 'Logs' && <LogViewer pods={pods} initialPod={selectedPod} />}
           </>
@@ -134,6 +136,7 @@ const TAB_ICONS = {
   Nodes: '🖥',
   Pods: '📦',
   Services: '🌐',
+  Disks: '💾',
   Actions: '⚡',
   Logs: '📋',
 }
