@@ -10,6 +10,7 @@ the dashboard can show the last scan without recomputing), one row per disk
 per scan in `readings` (the raw counters the trend analysis needs).
 """
 
+import datetime as dt
 import json
 import sqlite3
 
@@ -44,6 +45,14 @@ CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);  -- e.g. last back
 """
 
 
+def utc(ts):
+    """Timestamps are stored in UTC so that ORDER BY ts (string order) is
+    chronological; mixing +01:00 (laptop) and +00:00 (pod) would not be."""
+    if isinstance(ts, str):
+        ts = dt.datetime.fromisoformat(ts)
+    return ts.astimezone(dt.timezone.utc).isoformat(timespec="seconds")
+
+
 def connect(path):
     conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -56,7 +65,7 @@ def connect(path):
 def add_scan(conn, now, disks, host_errors, source, duration_s=None, hosts=None):
     """Store one scan. Disks without a serial (sleeping HDDs, SD cards) are
     kept in the result JSON but get no reading row."""
-    ts = now.isoformat(timespec="seconds")
+    ts = utc(now)
     with conn:
         cur = conn.execute(
             "INSERT INTO scans (ts, source, duration_s, hosts, host_errors, result) VALUES (?,?,?,?,?,?)",
@@ -103,7 +112,7 @@ def import_jsonl(conn, text, source="import"):
         except ValueError:
             continue
         if row.get("serial") and row.get("ts"):
-            by_ts.setdefault(row["ts"], []).append(row)
+            by_ts.setdefault(utc(row["ts"]), []).append(row)
     added = 0
     with conn:
         for ts, rows in sorted(by_ts.items()):

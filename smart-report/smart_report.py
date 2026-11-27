@@ -446,7 +446,7 @@ def analyse(d, past, now, specs):
     earlier readings, oldest first."""
     if not d.get("serial") or d["kind"] == "SD":
         return
-    past = [h for h in past if h.get("ts") and _ts(h) < now]
+    past = sorted((h for h in past if h.get("ts") and _ts(h) < now), key=_ts)
     spec = spec_for(d.get("model"), specs)
 
     # Counter changes (used by classify()), compared with the oldest scan of
