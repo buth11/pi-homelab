@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import os
 import socket
@@ -8,7 +9,8 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import paramiko
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -34,6 +36,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# API token
+#
+# This pod runs with hostNetwork, so uvicorn listens on the node's own LAN
+# address (192.168.50.x:8000), not only behind the ClusterIP Service. The
+# Basic Auth in the nginx frontend therefore did not protect direct requests
+# to port 8000 (found 2026-11-27: GET http://<node>:8000/api/nodes -> 200
+# without credentials, with shell/SSH-exec endpoints behind it).
+#
+# nginx adds X-Dashboard-Token (from the dashboard-api-token Secret, see
+# k8s/dashboard/api-token-secret.yaml) to every proxied request, and
+# anything without the right token is rejected. /health stays open for the
+# kubelet liveness probe. Fails closed: no token configured = everything
+# except /health is rejected.
+# ---------------------------------------------------------------------------
+
+API_TOKEN = os.getenv("DASHBOARD_API_TOKEN", "")
+OPEN_PATHS = {"/health"}
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    if request.url.path in OPEN_PATHS:
+        return await call_next(request)
+    sent = request.headers.get("x-dashboard-token", "")
+    if not API_TOKEN or not hmac.compare_digest(sent.encode(), API_TOKEN.encode()):
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return await call_next(request)
 
 # Disks tab (SMART wear report), see smart.py
 from smart import router as smart_router  # noqa: E402

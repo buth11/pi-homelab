@@ -45,6 +45,16 @@ else
 fi
 
 echo ""
+echo "==> Checking dashboard API token secret..."
+if ! kubectl get secret dashboard-api-token -n "$NAMESPACE" &>/dev/null; then
+  echo "   dashboard-api-token secret not found -- the backend rejects every request without it."
+  echo "   Generate and apply one (see k8s/dashboard/api-token-secret.yaml), then re-run this script."
+  exit 1
+else
+  echo "   dashboard-api-token secret already exists."
+fi
+
+echo ""
 echo "==> Applying deployments..."
 kubectl apply -f "$K8S_DIR/backend-deployment.yaml"
 kubectl apply -f "$K8S_DIR/frontend-deployment.yaml"

@@ -29,6 +29,12 @@ data:
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
+            # Shared token the backend requires on every /api/ request
+            # (it listens on the node IP via hostNetwork, so Basic Auth here
+            # alone does not protect it). The file holds one
+            # proxy_set_header line, from the dashboard-api-token Secret.
+            # It overrides any X-Dashboard-Token a client sends.
+            include /etc/nginx/api-token/proxy-header.conf;
             proxy_read_timeout 60s;
         }
 

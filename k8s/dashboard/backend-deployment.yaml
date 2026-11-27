@@ -37,6 +37,13 @@ spec:
         ports:
         - containerPort: 8000
         env:
+        # Required on every request except /health (see main.py). Not
+        # optional: without it the backend rejects everything.
+        - name: DASHBOARD_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: dashboard-api-token
+              key: token
         - name: G3_MAC
           valueFrom:
             configMapKeyRef:
