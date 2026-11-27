@@ -30,6 +30,7 @@ data:
     import os
     import threading
     import time
+    import urllib.error
     import urllib.request
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -37,40 +38,56 @@ data:
     INTERVAL = int(os.environ.get("INTERVAL", "300"))
     PORT = int(os.environ.get("PORT", "9101"))
 
-    # Two independent providers: a single provider being down or rate-limiting
-    # must not look like a dead VPN.
+    # Three independent providers. VPN exit IPs are shared by many users, so
+    # providers rate-limit them (ipinfo answers 429): that must not look like
+    # a dead VPN. Any HTTP answer proves connectivity; the ASN comes from the
+    # first provider that returns one. (ip-api's free tier is plain HTTP only;
+    # fine here, the request carries nothing and goes through the tunnel.)
     PROVIDERS = (
         ("https://ipinfo.io/json", lambda d: ((d.get("org") or "").split(" ")[0], d.get("country", ""))),
         ("https://ifconfig.co/json", lambda d: ((d.get("asn") or ""), d.get("country_iso", ""))),
+        ("http://ip-api.com/json/?fields=status,countryCode,as",
+         lambda d: ((d.get("as") or "").split(" ")[0], d.get("countryCode", ""))),
     )
 
     state = {"ok": 0, "is_home": 0, "asn": "", "country": "", "last": 0.0,
-             "checks": 0, "failures": 0}
+             "asn_ok": 0, "checks": 0, "failures": 0}
     lock = threading.Lock()
 
 
     def check():
+        reachable = False
         for url, parse in PROVIDERS:
+            host = url.split("/")[2]
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "curl/8", "Accept": "application/json"})
                 with urllib.request.urlopen(req, timeout=15) as r:
+                    reachable = True
                     asn, country = parse(json.load(r))
                 if not asn:
                     raise ValueError("no ASN in response")
                 asn = asn.upper()
                 is_home = int(asn in HOME_ASNS)
                 with lock:
-                    state.update(ok=1, is_home=is_home, asn=asn, country=country, last=time.time())
+                    state.update(ok=1, asn_ok=1, is_home=is_home, asn=asn, country=country, last=time.time())
                     state["checks"] += 1
-                print(f"{'LEAK' if is_home else 'ok'}: egress {asn} {country} (via {url.split('/')[2]})", flush=True)
+                print(f"{'LEAK' if is_home else 'ok'}: egress {asn} {country} (via {host})", flush=True)
                 return
-            except Exception as exc:  # try the next provider
-                print(f"provider {url.split('/')[2]} failed: {type(exc).__name__}: {exc}", flush=True)
+            except urllib.error.HTTPError as exc:  # got an answer: the internet is reachable
+                reachable = True
+                print(f"provider {host}: HTTP {exc.code}", flush=True)
+            except Exception as exc:
+                print(f"provider {host} failed: {type(exc).__name__}: {exc}", flush=True)
         with lock:
-            state.update(ok=0, last=time.time())
+            # No ASN this round: keep the last known ASN / is_home (a rate
+            # limit must not hide a leak seen earlier, nor invent one).
+            state.update(ok=int(reachable), asn_ok=0, last=time.time())
             state["checks"] += 1
             state["failures"] += 1
-        print("no provider reachable: no internet through the pod (VPN down, kill switch holding)", flush=True)
+        if reachable:
+            print("internet reachable, but no provider returned an ASN (rate limits?)", flush=True)
+        else:
+            print("no provider reachable: no internet through the pod (VPN down, kill switch holding)", flush=True)
 
 
     def loop():
@@ -97,6 +114,9 @@ data:
                 "# HELP vpn_guard_egress_is_home 1 if the pod egresses through the home ISP (VPN leak).",
                 "# TYPE vpn_guard_egress_is_home gauge",
                 f"vpn_guard_egress_is_home {s['is_home']}",
+                "# HELP vpn_guard_asn_lookup_ok 1 if the last check could determine the egress ASN.",
+                "# TYPE vpn_guard_asn_lookup_ok gauge",
+                f"vpn_guard_asn_lookup_ok {s['asn_ok']}",
                 "# HELP vpn_guard_egress_info ASN and country of the last successful check.",
                 "# TYPE vpn_guard_egress_info gauge",
                 f'vpn_guard_egress_info{{asn="{esc(s["asn"])}",country="{esc(s["country"])}"}} 1',

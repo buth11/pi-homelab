@@ -1,0 +1,52 @@
+# Script gluetun runs when Proton assigns a forwarded port
+# (VPN_PORT_FORWARDING_UP_COMMAND in deployment.yaml). Mounted into the
+# gluetun container at /scripts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qbt-port-forward
+  namespace: qbittorrent
+data:
+  qbt-port.sh: |
+    #!/bin/sh
+    # Called with the port Proton forwarded to us. Logs in to the qBittorrent
+    # WebUI API with the credentials from Secret qbittorrent-webui (env
+    # QBT_USER / QBT_PASS) and sets that port as the listen port.
+    # Runs in the gluetun container (busybox sh + wget).
+    #
+    # Safety: qBittorrent bans an IP for 1 h after 5 failed logins, and here
+    # that IP is 127.0.0.1 (it would also lock out the Firefox sidecar). So a
+    # rejected login aborts at once; only "qBittorrent not up yet" is retried.
+    PORT="$1"
+    B=http://127.0.0.1:8080
+    case "$PORT" in ''|*[!0-9]*) echo "qbt-port: bad port '$PORT'"; exit 1;; esac
+    [ -n "$QBT_USER" ] && [ -n "$QBT_PASS" ] || { echo "qbt-port: QBT_USER/QBT_PASS not set (Secret qbittorrent-webui)"; exit 1; }
+
+    # application/x-www-form-urlencoded escaping for the login form
+    enc() { printf %s "$1" | sed -e 's/%/%25/g' -e 's/&/%26/g' -e 's/+/%2B/g' -e 's/=/%3D/g' \
+      -e 's/ /%20/g' -e 's/#/%23/g' -e 's/;/%3B/g' -e 's/?/%3F/g' -e 's#/#%2F#g' -e 's/"/%22/g'; }
+
+    i=0
+    while [ $i -lt 60 ]; do
+      i=$((i + 1))
+      R=$(wget -S -q -O /dev/null --header "Referer: $B" \
+          --post-data "username=$(enc "$QBT_USER")&password=$(enc "$QBT_PASS")" \
+          "$B/api/v2/auth/login" 2>&1)
+      # qBittorrent 5.x names the session cookie QBT_SID_<port>, older ones SID
+      SID=$(printf %s "$R" | sed -n 's/.*[Ss]et-[Cc]ookie: *\([A-Za-z0-9_]*SID[A-Za-z0-9_]*=[^;]*\).*/\1/p' | head -1)
+      if [ -n "$SID" ]; then
+        if wget -q -O /dev/null --header "Cookie: $SID" --header "Referer: $B" \
+            --post-data "json={\"listen_port\":$PORT,\"random_port\":false,\"upnp\":false}" \
+            "$B/api/v2/app/setPreferences"; then
+          echo "qbt-port: qBittorrent listen port set to $PORT"
+          exit 0
+        fi
+        echo "qbt-port: logged in but setPreferences failed (attempt $i)"
+      elif printf %s "$R" | grep -q -E 'HTTP/1\.[01] (401|403)'; then
+        echo "qbt-port: login REJECTED, check Secret qbittorrent-webui; not retrying (ban protection)"
+        exit 1
+      fi
+      sleep 5
+    done
+    echo "qbt-port: qBittorrent API not reachable after 5 min, port $PORT not set"
+    exit 1

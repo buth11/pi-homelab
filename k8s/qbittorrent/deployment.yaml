@@ -48,6 +48,19 @@ spec:
       - name: gluetun
         image: qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
         restartPolicy: Always
+        # The pod network namespace outlives a gluetun container restart, and
+        # so do the ip rules of the previous run. A new gluetun then fails with
+        # "adding ip rule 101 ... table 51820: file exists" and never reconnects
+        # (seen 2026-11-27). Delete leftovers before starting. (The gluetun wiki
+        # suggests postStart for this, but postStart runs concurrently with the
+        # container and could race gluetun's own rule setup.)
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while ip rule del table 51820 2>/dev/null; do :; done
+          while ip -6 rule del table 51820 2>/dev/null; do :; done
+          exec /gluetun-entrypoint
         securityContext:
           capabilities:
             add:
@@ -73,6 +86,26 @@ spec:
         # is only allowed on P2P servers).
         - name: PORT_FORWARD_ONLY
           value: "on"
+        # Proton NAT-PMP port forwarding (incoming peers). Proton assigns the
+        # port and it changes on every reconnect; gluetun then runs
+        # /scripts/qbt-port.sh (ConfigMap qbt-port-forward), which logs in to
+        # the qBittorrent API with Secret qbittorrent-webui and sets it as the
+        # listen port. A rejected login is not retried (qBittorrent bans
+        # 127.0.0.1 after 5 failures).
+        - name: VPN_PORT_FORWARDING
+          value: "on"
+        - name: VPN_PORT_FORWARDING_UP_COMMAND
+          value: "/bin/sh /scripts/qbt-port.sh {{PORTS}}"
+        - name: QBT_USER
+          valueFrom:
+            secretKeyRef:
+              name: qbittorrent-webui
+              key: username
+        - name: QBT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: qbittorrent-webui
+              key: password
         # 8080 WebUI, 3000/3001 noVNC, 9101 vpn-guard metrics (Prometheus)
         - name: FIREWALL_INPUT_PORTS
           value: "8080,3000,3001,9101"
@@ -85,11 +118,14 @@ spec:
             command: ["/gluetun-entrypoint", "healthcheck"]
           periodSeconds: 5
           failureThreshold: 60
-        livenessProbe:
-          exec:
-            command: ["/gluetun-entrypoint", "healthcheck"]
-          periodSeconds: 30
-          failureThreshold: 3
+        # No livenessProbe on purpose: gluetun restarts the tunnel itself when
+        # its healthcheck fails (HEALTH_RESTART_VPN). A kubelet kill on top of
+        # that triggered the stale-ip-rule loop above. VpnDown alert covers
+        # a tunnel that really stays down.
+        volumeMounts:
+        - name: qbt-port-forward
+          mountPath: /scripts
+          readOnly: true
         resources:
           requests:
             memory: 32Mi
@@ -179,6 +215,9 @@ spec:
           readOnly: true
 
       volumes:
+      - name: qbt-port-forward
+        configMap:
+          name: qbt-port-forward
       - name: vpn-guard
         configMap:
           name: vpn-guard

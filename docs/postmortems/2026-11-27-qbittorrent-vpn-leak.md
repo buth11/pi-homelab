@@ -130,3 +130,34 @@ there a handshake") measured the wrong thing.
 - Removing a safety component must not hide in a commit called "docs: …".
 - On Ubuntu, wg-quick plus systemd-networkd is a known trap. Any policy
   routing that networkd does not own disappears on its next restart.
+
+## Addendum: same evening, the VPN stuck after a gluetun restart (no leak)
+
+**What happened.** After the move to Switzerland, the kubelet's
+`livenessProbe` killed gluetun once. Gluetun restarts its tunnel by itself,
+so the probe was redundant. Restarting a native sidecar keeps the pod's
+network namespace, and with it the previous run's `ip rule` entries. The
+new gluetun then failed with `adding ip rule 101 ... table 51820: file
+exists` and retried forever. Its startupProbe killed it every 5 minutes,
+which made no difference.
+
+**Impact.** No connectivity for about 15 minutes. **No leak.** The pod
+firewall stayed at `-P OUTPUT DROP` the whole time, and vpn-guard reported
+"no internet, kill switch holding".
+
+**Fix.**
+- Gluetun now starts through a wrapper that deletes leftover table-51820
+  rules before `exec /gluetun-entrypoint`. The gluetun wiki suggests a
+  `postStart` hook instead, but that runs concurrently with the container
+  and could race it.
+- The livenessProbe is removed.
+
+**Verified.** gluetun was killed with SIGKILL (`crictl stop -t 0`). While it
+was down, egress stayed blocked. It came back on its own in about 10 s,
+with no `file exists` error, and got a new forwarded port, which
+qBittorrent picked up automatically.
+
+**Lesson.** A liveness probe on a component that already self-heals mostly
+adds failure modes. For gluetun, a startupProbe (which only orders
+startup) is enough.
+
