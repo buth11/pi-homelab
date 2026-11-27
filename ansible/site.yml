@@ -16,3 +16,12 @@
   become: true
   roles:
     - node-boot-watcher
+
+- name: Install smartmontools on nodes with physical SMART-capable disks
+  # Pis boot from SD cards (no SMART), k3s-burst-worker has a virtual disk
+  # (its physical disks belong to Proxmox).
+  hosts: g3-worker3
+  become: true
+  tags: [smartmontools]
+  roles:
+    - smartmontools

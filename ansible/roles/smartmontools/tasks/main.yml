@@ -1,0 +1,11 @@
+---
+# smartctl for on-demand disk health reports (smart-report/).
+# install_recommends=false: on Ubuntu the package recommends a mail stack
+# (bsd-mailx/postfix), which a K3s node has no use for.
+- name: Install smartmontools
+  ansible.builtin.apt:
+    name: smartmontools
+    state: present
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
