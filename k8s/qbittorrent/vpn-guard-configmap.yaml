@@ -1,0 +1,126 @@
+# Script for the vpn-guard container in the qbittorrent pod (see deployment.yaml).
+# Single source of truth: edit the script here, then
+#   kubectl apply -f k8s/qbittorrent/vpn-guard-configmap.yaml
+#   kubectl rollout restart deployment/qbittorrent -n qbittorrent
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vpn-guard
+  namespace: qbittorrent
+data:
+  vpn-guard.py: |
+    """vpn-guard: checks where the qBittorrent pod really egresses from.
+
+    Runs as a container inside the qbittorrent pod, so it shares the pod's
+    network namespace: its traffic takes exactly the path that qBittorrent and
+    Firefox take. Every INTERVAL seconds it asks a public "what is my IP" service
+    which network (ASN) the request came from, and exposes Prometheus metrics on
+    :9101/metrics.
+
+      vpn_guard_egress_ok        1 = internet reachable (through the tunnel)
+      vpn_guard_egress_is_home   1 = egress ASN is the home ISP, i.e. a LEAK
+      vpn_guard_egress_info{asn, country}
+
+    The IP address itself is never logged or exported, only the ASN and the
+    country. Alert rules: k8s/qbittorrent/vpn-guard-monitoring.yaml.
+    Background: docs/postmortems/2026-11-27-qbittorrent-vpn-leak.md
+    """
+
+    import json
+    import os
+    import threading
+    import time
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    HOME_ASNS = {a.strip().upper() for a in os.environ.get("HOME_ASNS", "").split(",") if a.strip()}
+    INTERVAL = int(os.environ.get("INTERVAL", "300"))
+    PORT = int(os.environ.get("PORT", "9101"))
+
+    # Two independent providers: a single provider being down or rate-limiting
+    # must not look like a dead VPN.
+    PROVIDERS = (
+        ("https://ipinfo.io/json", lambda d: ((d.get("org") or "").split(" ")[0], d.get("country", ""))),
+        ("https://ifconfig.co/json", lambda d: ((d.get("asn") or ""), d.get("country_iso", ""))),
+    )
+
+    state = {"ok": 0, "is_home": 0, "asn": "", "country": "", "last": 0.0,
+             "checks": 0, "failures": 0}
+    lock = threading.Lock()
+
+
+    def check():
+        for url, parse in PROVIDERS:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "curl/8", "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    asn, country = parse(json.load(r))
+                if not asn:
+                    raise ValueError("no ASN in response")
+                asn = asn.upper()
+                is_home = int(asn in HOME_ASNS)
+                with lock:
+                    state.update(ok=1, is_home=is_home, asn=asn, country=country, last=time.time())
+                    state["checks"] += 1
+                print(f"{'LEAK' if is_home else 'ok'}: egress {asn} {country} (via {url.split('/')[2]})", flush=True)
+                return
+            except Exception as exc:  # try the next provider
+                print(f"provider {url.split('/')[2]} failed: {type(exc).__name__}: {exc}", flush=True)
+        with lock:
+            state.update(ok=0, last=time.time())
+            state["checks"] += 1
+            state["failures"] += 1
+        print("no provider reachable: no internet through the pod (VPN down, kill switch holding)", flush=True)
+
+
+    def loop():
+        while True:
+            check()
+            time.sleep(INTERVAL)
+
+
+    def esc(v):
+        return str(v).replace("\\", "\\\\").replace('"', '\\"')
+
+
+    class Metrics(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path not in ("/metrics", "/"):
+                self.send_error(404)
+                return
+            with lock:
+                s = dict(state)
+            lines = [
+                "# HELP vpn_guard_egress_ok 1 if the pod reached the internet in the last check.",
+                "# TYPE vpn_guard_egress_ok gauge",
+                f"vpn_guard_egress_ok {s['ok']}",
+                "# HELP vpn_guard_egress_is_home 1 if the pod egresses through the home ISP (VPN leak).",
+                "# TYPE vpn_guard_egress_is_home gauge",
+                f"vpn_guard_egress_is_home {s['is_home']}",
+                "# HELP vpn_guard_egress_info ASN and country of the last successful check.",
+                "# TYPE vpn_guard_egress_info gauge",
+                f'vpn_guard_egress_info{{asn="{esc(s["asn"])}",country="{esc(s["country"])}"}} 1',
+                "# HELP vpn_guard_last_check_timestamp_seconds Time of the last check.",
+                "# TYPE vpn_guard_last_check_timestamp_seconds gauge",
+                f"vpn_guard_last_check_timestamp_seconds {s['last']:.0f}",
+                "# TYPE vpn_guard_checks_total counter",
+                f"vpn_guard_checks_total {s['checks']}",
+                "# TYPE vpn_guard_failures_total counter",
+                f"vpn_guard_failures_total {s['failures']}",
+            ]
+            body = ("\n".join(lines) + "\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # no per-scrape access log
+            pass
+
+
+    if __name__ == "__main__":
+        if not HOME_ASNS:
+            raise SystemExit("HOME_ASNS is required (e.g. AS5617), otherwise a leak cannot be detected")
+        threading.Thread(target=loop, daemon=True).start()
+        HTTPServer(("", PORT), Metrics).serve_forever()

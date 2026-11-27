@@ -104,9 +104,19 @@ there a handshake") measured the wrong thing.
 
 - [x] Kill switch in the pod (Gluetun firewall) plus qBittorrent bound to `tun0`.
 - [x] Host `wg-quick@proton` disabled; docs updated (CLAUDE.md, setup/05).
-- [ ] Alert when the qBittorrent pod's egress IP is not a Proton IP. The
-      kill switch prevents leaks, but a broken tunnel would otherwise go
-      unnoticed as "no downloads".
+- [x] Alerting (2026-11-27): a `vpn-guard` container in the pod checks the
+      real egress network (ASN) every 5 min. Prometheus alerts, all routed
+      to ntfy:
+      - `QbittorrentVpnLeak` (critical): egress through the home ISP AS5617.
+      - `QbittorrentVpnDown` (warning): no connectivity for 15 min; the kill
+        switch is holding.
+      - `QbittorrentVpnGuardMissing` (warning): the pod runs but nothing
+        reports. This would have caught the 2026-05-31 removal of Gluetun.
+
+      Rules are unit-tested with promtool. Delivery was tested end to end
+      with a labelled test alert sent to ntfy.
+- [x] Deployment strategy `Recreate`: never two Gluetuns with the same key,
+      never two qBittorrents on one config.
 - [ ] Optional: Proton port forwarding (NAT-PMP) in Gluetun for incoming
       peers. This affects speed, not privacy.
 
