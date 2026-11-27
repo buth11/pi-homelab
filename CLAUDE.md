@@ -95,7 +95,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 ## Services
 
 - **Pi-hole**: namespace pihole, DNS ad-blocking
-- **qBittorrent**: namespace qbittorrent, ProtonVPN Plus WireGuard
+- **qBittorrent**: namespace qbittorrent, all traffic (incl. the Firefox sidecar) through ProtonVPN via Gluetun with a kill switch
 - **Firefox**: namespace qbittorrent, noVNC browser
 - **Jellyfin**: namespace jellyfin, media server, Intel QSV hardware acceleration
 - **Vaultwarden**: namespace vaultwarden, self-hosted password manager, Traefik Ingress at vault.home.local + vault.analitykbiznesowy.pl (real Let's Encrypt cert via Hostido AutoSSL, split-DNS only via Pi-hole + Tailscale — see setup/07-vaultwarden-tls-hostido.md)
@@ -112,10 +112,9 @@ this file is the fast-lookup summary, not the source of truth for detail.
 
 ## VPN
 
-- ProtonVPN Plus P2P WireGuard na g3-worker3
-- Config: /etc/wireguard/proton.conf
-- Auto-start: wg-quick@proton.service
-- IP: 205.147.16.83 (Netherlands P2P)
+- ProtonVPN Plus P2P WireGuard via a **Gluetun native sidecar in the qBittorrent pod** (kill switch: no route except the tunnel; qBittorrent + Firefox share the pod, both covered). Key in Secret `protonvpn-wireguard`.
+- Check: `kubectl exec -n qbittorrent deploy/qbittorrent -c qbittorrent -- curl -s https://api.ipify.org` must print the Proton IP 205.147.16.83, never the home IP.
+- Host-level `wg-quick@proton` on g3 is **disabled on purpose** (systemd-networkd drops its routing rules on restart -> silent leak). Do not re-enable it. See docs/postmortems/2026-11-27-qbittorrent-vpn-leak.md
 - Tailscale: k8s-operator + subnet router, advertises 192.168.50.0/24 to the tailnet (k8s/tailscale/connector.yaml)
 
 ## TLS Certificates
