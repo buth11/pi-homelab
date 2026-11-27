@@ -7,6 +7,11 @@ metadata:
     app: qbittorrent
 spec:
   replicas: 1
+  # Recreate, never two pods at once: two Gluetuns with the same Proton key
+  # would fight over the tunnel, and two qBittorrents would race on the
+  # same config (see postmortems/2026-07-25-qbittorrent-config-race-and-port-drift.md).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: qbittorrent
@@ -66,8 +71,9 @@ spec:
           value: "169.150.196.65"
         - name: VPN_ENDPOINT_PORT
           value: "51820"
+        # 8080 WebUI, 3000/3001 noVNC, 9101 vpn-guard metrics (Prometheus)
         - name: FIREWALL_INPUT_PORTS
-          value: "8080,3000,3001"
+          value: "8080,3000,3001,9101"
         - name: BLOCK_MALICIOUS
           value: "off"
         - name: TZ
@@ -138,7 +144,42 @@ spec:
         - name: downloads
           mountPath: /downloads
 
+      # Checks every 5 min which network the pod really egresses from and
+      # exposes it to Prometheus (alerts: vpn-guard-monitoring.yaml). Same pod
+      # = same path as qBittorrent and Firefox, so a leak shows up here.
+      - name: vpn-guard
+        image: python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89
+        command: ["python3", "-I", "/app/vpn-guard.py"]
+        env:
+        # Home ISP (Orange Polska). Egress from this ASN = VPN leak.
+        - name: HOME_ASNS
+          value: "AS5617"
+        - name: INTERVAL
+          value: "300"
+        ports:
+        - containerPort: 9101
+          name: vpn-guard
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            memory: 16Mi
+          limits:
+            memory: 48Mi
+        volumeMounts:
+        - name: vpn-guard
+          mountPath: /app
+          readOnly: true
+
       volumes:
+      - name: vpn-guard
+        configMap:
+          name: vpn-guard
       - name: config
         persistentVolumeClaim:
           claimName: qbittorrent-config-local

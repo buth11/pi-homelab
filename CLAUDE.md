@@ -114,6 +114,7 @@ this file is the fast-lookup summary, not the source of truth for detail.
 
 - ProtonVPN Plus P2P WireGuard via a **Gluetun native sidecar in the qBittorrent pod** (kill switch: no route except the tunnel; qBittorrent + Firefox share the pod, both covered). Key in Secret `protonvpn-wireguard`.
 - Check: `kubectl exec -n qbittorrent deploy/qbittorrent -c qbittorrent -- curl -s https://api.ipify.org` must print the Proton IP 205.147.16.83, never the home IP.
+- Leak alerting: `vpn-guard` container in the same pod -> Prometheus alerts QbittorrentVpnLeak (critical) / VpnDown / VpnGuardMissing -> ntfy (k8s/qbittorrent/vpn-guard-*.yaml). Home ISP = AS5617.
 - Host-level `wg-quick@proton` on g3 is **disabled on purpose** (systemd-networkd drops its routing rules on restart -> silent leak). Do not re-enable it. See docs/postmortems/2026-11-27-qbittorrent-vpn-leak.md
 - Tailscale: k8s-operator + subnet router, advertises 192.168.50.0/24 to the tailnet (k8s/tailscale/connector.yaml)
 

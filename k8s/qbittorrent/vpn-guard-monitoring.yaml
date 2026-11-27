@@ -1,0 +1,74 @@
+# Scrape + alerts for vpn-guard (container in the qbittorrent pod).
+# Routing: severity critical/warning -> ntfy (helm-values/kube-prometheus-stack.yaml).
+# Background: docs/postmortems/2026-11-27-qbittorrent-vpn-leak.md
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: qbittorrent-vpn-guard
+  namespace: qbittorrent
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: qbittorrent
+  podMetricsEndpoints:
+  - port: vpn-guard
+    interval: 60s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: qbittorrent-vpn-guard
+  namespace: qbittorrent
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+  - name: qbittorrent.vpn
+    rules:
+    # The one that must never fire: torrent/Firefox traffic leaving via the home ISP.
+    - alert: QbittorrentVpnLeak
+      expr: max(vpn_guard_egress_is_home{namespace="qbittorrent"}) == 1
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "WYCIEK VPN: qBittorrent/Firefox wychodzą przez domowe łącze"
+        description: >-
+          vpn-guard widzi ruch z poda qbittorrent przez domowego operatora.
+          Natychmiast: kubectl scale deployment qbittorrent -n qbittorrent --replicas=0,
+          potem sprawdź kontener gluetun. Postmortem 2026-11-27.
+
+    # Tunnel down: the kill switch is holding (no leak), but nothing downloads.
+    - alert: QbittorrentVpnDown
+      expr: |
+        max(vpn_guard_egress_ok{namespace="qbittorrent"}) == 0
+          or
+        (time() - max(vpn_guard_last_check_timestamp_seconds{namespace="qbittorrent"})) > 1200
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: "VPN qBittorrenta nie działa (kill switch blokuje ruch)"
+        description: >-
+          Pod qbittorrent nie ma połączenia z internetem przez VPN od 15 min.
+          To nie jest wyciek, ale pobieranie stoi. Sprawdź:
+          kubectl logs -n qbittorrent deploy/qbittorrent -c gluetun --tail=50
+
+    # The pod runs but nobody is checking: e.g. vpn-guard or gluetun removed
+    # from the manifest (that is how the 2026 leak started, unnoticed).
+    - alert: QbittorrentVpnGuardMissing
+      expr: |
+        (max(kube_deployment_status_replicas_available{namespace="qbittorrent", deployment="qbittorrent"}) > 0)
+          unless on()
+        (max(up{namespace="qbittorrent", job=~".*vpn-guard.*"}) == 1)
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: "qBittorrent działa bez kontroli VPN (vpn-guard nie raportuje)"
+        description: >-
+          Deployment qbittorrent ma działające repliki, ale Prometheus nie
+          pobiera metryk vpn-guard. Sprawdź, czy kontenery gluetun i vpn-guard
+          są w podzie: kubectl get pod -n qbittorrent -o yaml
