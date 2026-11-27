@@ -14,3 +14,18 @@ secrets/
 SRE/
 dashboard/.groupedtimelineinclude
 docs/security/open-items.md
+
+# Syncthing — this repo is a Syncthing folder root
+.stfolder/
+.stignore
+.stversions/
+*.sync-conflict-*
+~syncthing~*.tmp
+.syncthing.*.tmp
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Ansible local cache (collections/roles/modules)
+.ansible/
