@@ -42,6 +42,9 @@ spec:
         - name: auth
           mountPath: /etc/nginx/secrets
           readOnly: true
+        - name: api-token
+          mountPath: /etc/nginx/api-token
+          readOnly: true
       volumes:
       - name: nginx-conf
         configMap:
@@ -49,3 +52,9 @@ spec:
       - name: auth
         secret:
           secretName: dashboard-auth
+      - name: api-token
+        secret:
+          secretName: dashboard-api-token
+          items:
+          - key: proxy-header.conf
+            path: proxy-header.conf
