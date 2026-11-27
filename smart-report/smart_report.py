@@ -89,7 +89,7 @@ SC=$(command -v smartctl 2>/dev/null || true)
 echo "@@HOST $(hostname)"
 for d in /sys/block/mmcblk[0-9]*; do
   [ -e "$d/device/name" ] || continue
-  echo "@@MMC $(basename "$d")|$(cat "$d/device/name")|$(cat "$d/device/date" 2>/dev/null)|$(cat "$d/device/manfid" 2>/dev/null)|$(( $(cat "$d/size") * 512 ))"
+  echo "@@MMC $(basename "$d")|$(cat "$d/device/name")|$(cat "$d/device/date" 2>/dev/null)|$(cat "$d/device/manfid" 2>/dev/null)|$(( $(cat "$d/size") * 512 ))|$(cat "$d/device/type" 2>/dev/null)|$(tr -d '\0' </proc/device-tree/model 2>/dev/null)"
 done
 if [ -z "$SC" ]; then echo "@@NOSMARTCTL"; exit 0; fi
 if [ -n "$S" ] && ! sudo -n "$SC" --version >/dev/null 2>&1; then echo "@@NOSUDO"; exit 0; fi
@@ -224,11 +224,21 @@ def parse_remote(name, out):
         elif line.startswith("@@NOSUDO"):
             res["notes"].append("passwordless sudo for smartctl is missing (see README)")
         elif line.startswith("@@MMC "):
-            dev, cid_name, date, manfid, size = (line[6:].split("|") + [""] * 5)[:5]
+            dev, cid_name, date, manfid, size, ctype, board = (line[6:].split("|") + [""] * 7)[:7]
+            if ctype == "MMC":
+                ff = "eMMC"
+            elif "Raspberry Pi" in board:
+                ff = "microSD"  # every Raspberry Pi card slot since the B+ is microSD
+            else:
+                ff = "SD"
             res["disks"].append({
                 "host": name, "dev": "/dev/" + dev, "kind": "SD",
-                "model": f"{cid_name} (manfid {manfid}, prod. {date})",
+                "model": sd_model(cid_name, manfid),
+                "manufactured": sd_date(date),
+                "manufactured_src": "card CID register",
                 "capacity": int(size) if size.isdigit() else None,
+                "form_factor": ff,
+                "form_factor_src": f"card type {ctype or '?'}" + (f", {board}" if board else ""),
                 "level": "INFO",
                 "issues": ["SD/eMMC card: no SMART, wear cannot be read"],
             })
@@ -294,6 +304,7 @@ def parse_disk(host, dev, text, rc):
         temp=j.get("temperature", {}).get("current"),
         smart_passed=j.get("smart_status", {}).get("passed"),
     )
+    d["form_factor"], d["form_factor_src"] = form_factor(j, kind, d["model"])
 
     if not j.get("smart_support", {}).get("available", True) or (
             d["poh"] is None and d["smart_passed"] is None):
@@ -317,6 +328,56 @@ def parse_disk(host, dev, text, rc):
     # Exit bit 6 (error log has entries) is handled through the err_log
     # counter instead: only growth matters, old entries stay forever.
     return d
+
+
+# SD card manufacturer IDs (CID register, assigned by the SD Association).
+# Only well-established ones; anything else is shown as the raw ID.
+SD_MANUFACTURERS = {
+    0x01: "Panasonic", 0x02: "Toshiba/Kioxia", 0x03: "SanDisk", 0x1B: "Samsung",
+    0x1D: "ADATA", 0x27: "Phison", 0x28: "Lexar", 0x41: "Kingston",
+    0x74: "Transcend", 0x76: "Patriot", 0x82: "Sony",
+}
+
+
+def sd_model(name, manfid):
+    try:
+        mid = int(manfid, 16)
+    except ValueError:
+        return name or "?"
+    if mid in SD_MANUFACTURERS:
+        return f"{SD_MANUFACTURERS[mid]} {name}".strip()
+    # 0x00 is not a valid ID; common on no-name and counterfeit cards
+    return f"{name} (unknown maker, manfid {mid:#04x})"
+
+
+def sd_date(date):
+    """CID date "MM/YYYY" -> "YYYY-MM" (sorts as text)."""
+    m, _, y = (date or "").partition("/")
+    return f"{y}-{int(m):02d}" if y.isdigit() and m.isdigit() else None
+
+
+FORM_FACTOR_NAMES = {
+    "3.5 inches": '3.5"', "2.5 inches": '2.5"', "1.8 inches": '1.8"',
+    "less than 1.8 inches": '<1.8"', "5.25 inches": '5.25"',
+    "M.2": "M.2", "mSATA": "mSATA", "MicroSSD": "MicroSSD", "CFast": "CFast",
+}
+
+
+def form_factor(j, kind, model):
+    """(form factor, where it came from). The drive's own IDENTIFY data
+    (ATA word 168) is used, except when the model name clearly says M.2:
+    the no-name "M.2 SSD 512GB" in g3-worker3 reports 2.5 inches. NVMe has
+    no such field; every consumer NVMe line in this lab is M.2 only."""
+    reported = FORM_FACTOR_NAMES.get((j.get("form_factor") or {}).get("name"))
+    up = (model or "").upper()
+    if "M.2" in up or " 2280" in up:
+        src = "model name" + (f" (drive reports {reported})" if reported and reported != "M.2" else "")
+        return "M.2", src
+    if reported:
+        return reported, "drive"
+    if kind == "NVMe":
+        return "M.2", "assumed for NVMe (no form factor field)"
+    return None, None
 
 
 def parse_nvme(d, log):
@@ -629,7 +690,7 @@ def fmt_years(d):
 
 
 def print_table(disks):
-    cols = [("HOST", 11), ("DEVICE", 12), ("MODEL", 26), ("TYPE", 4), ("SIZE", 5),
+    cols = [("HOST", 11), ("DEVICE", 12), ("MODEL", 26), ("TYPE", 4), ("FORM", 7), ("MADE", 7), ("SIZE", 5),
             ("HOURS", 6), ("WRITTEN", 9), ("WEAR", 5), ("TBW LEFT", 9), ("TEMP", 4),
             ("GB/DAY", 7), ("LIFE LEFT", 9), ("STATUS", 6)]
     print("  ".join(n.ljust(w) for n, w in cols))
@@ -640,6 +701,8 @@ def print_table(disks):
             rate = f"{d['gb_per_day']:.1f}" + ("*" if d.get("rate_src") == "lifetime average" else "")
         row = [
             d["host"], d["dev"], (d.get("model") or "?")[:26], d.get("kind", "?"),
+            d.get("form_factor") or "-",
+            d.get("manufactured") or "-",
             fmt_size(d.get("capacity")),
             str(d["poh"]) if d.get("poh") is not None else "-",
             fmt_bytes(d.get("written")),

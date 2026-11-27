@@ -33,6 +33,35 @@ machine 192.168.50.58 login <user> password <password>
 
 Alternatively, set `SMART_DASHBOARD_USER` / `SMART_DASHBOARD_PASSWORD`.
 
+## Columns beyond wear
+
+**FORM.** The physical format: 3.5", 2.5", M.2 or microSD.
+
+- **SATA:** read from the drive's own IDENTIFY data, unless the model name
+  clearly says M.2. The no-name "M.2 SSD 512GB" in g3-worker3 reports
+  2.5".
+- **NVMe:** there is no such field. Every consumer NVMe line in the lab is
+  M.2, so M.2 is assumed.
+- **SD cards in a Raspberry Pi:** shown as microSD.
+
+The dashboard tooltip shows the source of the value.
+
+**MADE.** The production date (year-month). It is only available for SD and
+microSD cards, from their CID register. The maker is decoded from the same
+register; manfid 0x00 is not a valid ID and usually means a no-name or
+counterfeit card. SATA, NVMe and HDD SMART data has **no** production date,
+so the column is empty for those drives. The date is printed on the drive
+label. It is not estimated from power-on hours, because those are
+unreliable (see below).
+
+**Dashboard table.**
+- Click a column name to sort: ascending, then descending, then the default
+  order.
+- **▾** opens an Excel-style menu with sort, search, and a checkbox list of
+  values with counts. The list only offers values left after the other
+  columns' filters.
+- The sort and filters are remembered in the browser.
+
 ## How wear is judged
 
 **SSD / NVMe.** Two measures are computed, and the **higher** one is shown

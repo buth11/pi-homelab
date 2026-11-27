@@ -34,3 +34,52 @@
 .disk-banner-warn  { background: rgba(210,153,34,.12); color: var(--yellow); display: flex; flex-direction: column; gap: 2px; }
 .disk-footnote { padding: 0 16px 14px; font-size: 12px; }
 .disk-backup-warn { color: var(--yellow); }
+
+/* sortable + filterable headers */
+.th-inner { display: inline-flex; align-items: center; gap: 4px; }
+.th-label { cursor: pointer; }
+.th-filter {
+  background: none; border: none; color: var(--text2); cursor: pointer;
+  font-size: 11px; padding: 0 3px; border-radius: 4px; line-height: 16px;
+}
+.th-filter:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.th-filter-on { color: var(--accent); }
+
+.disk-clear-btn {
+  background: rgba(88,166,255,.1); color: var(--accent); border: 1px solid rgba(88,166,255,.4);
+  border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+
+/* Excel-like column menu (position: fixed so the scrolling table does not clip it) */
+.col-menu {
+  position: fixed; z-index: 50; width: 260px; padding: 6px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5); font-size: 13px; font-weight: normal;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.col-menu-item {
+  text-align: left; background: none; border: none; color: var(--text);
+  padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px;
+}
+.col-menu-item:hover { background: var(--bg3); }
+.col-menu-item.active { color: var(--accent); }
+.col-menu-sep { height: 1px; background: var(--border); margin: 2px 0; }
+.col-menu-search {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 5px 8px; font-size: 13px;
+}
+.col-menu-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 2px 0; }
+.col-menu-row { display: flex; align-items: center; gap: 8px; padding: 3px 8px; cursor: pointer; }
+.col-menu-row:hover { background: var(--bg3); }
+.col-menu-all { font-style: italic; color: var(--text2); }
+.col-menu-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-menu-count { color: var(--text2); font-size: 11px; }
+.col-menu-actions { display: flex; justify-content: flex-end; gap: 6px; padding-top: 2px; }
+.col-menu-btn {
+  background: var(--bg3); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.col-menu-btn:disabled { opacity: .4; cursor: default; }
+.col-menu-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.nowrap { white-space: nowrap; }
+.th-sortable .sort-icon { margin-left: 2px; }
